@@ -1,0 +1,32 @@
+* Rife
+
+CLI tool to watch local media with others. Handles both streaming and synchronization.
+
+** Usage
+
+Important: the TCP ports *5300* and *5301* must point to the host's computer. This means that
+- if the host and the clients are on different networks, the most forward the ports in their NAT
+- if the host has a firewall, the ports must be opened there
+
+To host a file, simply use the ~server~ subcommand, and pass the path:
+#+BEGIN_SRC shell
+rife host <file>
+#+END_SRC
+
+Then on the other end, run:
+#+BEGIN_SRC shell
+rife connect <address>
+#+END_SRC
+where address is the IPv4 address of the host, without a port number.
+
+** Building / Running
+
+To build, run the following command:
+#+BEGIN_SRC shell
+go build ./cmd/rife
+#+END_SRC
+
+To run, run the resulting executable, or:
+#+BEGIN_SRC shell
+go run ./cmd/rife ...
+#+END_SRC
