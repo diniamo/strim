@@ -46,7 +46,7 @@ func (c *Client) PacketLoop() error {
 		packet, err := c.conn.ReadPacket()
 		if err != nil {
 			if errors.Is(err, io.EOF) {
-				log.Warnf("Disconnected")
+				log.Warnf("Connection reset by server")
 				break
 			} else {
 				log.Errorf("Failed to read packet: %s", err)

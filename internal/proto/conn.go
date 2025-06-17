@@ -34,7 +34,7 @@ func (c *Conn) ReadRaw() ([]byte, error) {
 func (c *Conn) ReadPacket() (Packet, error) {
 	raw, err := c.ReadRaw()
 	if err != nil {
-		return Packet{}, nil
+		return Packet{}, err
 	}
 
 	return DecodePacket(raw), nil
