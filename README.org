@@ -17,7 +17,7 @@ Then on the other end, run:
 #+BEGIN_SRC shell
 rife connect <address>
 #+END_SRC
-where address is the IPv4 address of the host, without a port number.
+where address is that of the host, without a port number.
 
 ** Building / Running
 

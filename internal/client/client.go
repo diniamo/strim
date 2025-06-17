@@ -26,7 +26,7 @@ type Client struct {
 }
 
 func Connect(address string) (*Client, error) {
-	conn, err := net.Dial("tcp", fmt.Sprintf("%s:%s", address, server.PortMessage))
+	conn, err := net.Dial("tcp", net.JoinHostPort(address, server.PortMessage))
 	if err != nil {
 		return nil, err
 	}
