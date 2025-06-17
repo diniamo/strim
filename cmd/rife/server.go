@@ -1,22 +1,24 @@
 package main
 
 import (
-	"os"
+	"context"
+	"errors"
 
 	log "github.com/diniamo/glog"
 	"github.com/diniamo/rife/internal/mpv"
 	"github.com/diniamo/rife/internal/server"
+	"github.com/urfave/cli/v3"
 )
 
-func runServer(args []string) {
-	if len(args) < 1 {
-		log.Fatal("No input file")
+func runServer(ctx context.Context, cmd *cli.Command) error {
+	path := cmd.StringArg("path")
+	if path == "" {
+		return errors.New("Missing path")
 	}
-	path := args[0]
-
+	
 	mpv, ipc, err := mpv.Open(path)
 	if err != nil {
-		log.Fatalf("Failed to open mpv: %s", err)
+		return errors.New("Failed to open mpv: " + err.Error())
 	}
 
 	server := server.NewServer(path, ipc)
@@ -26,6 +28,7 @@ func runServer(args []string) {
 	err = mpv.Wait()
 	if err != nil {
 		log.Warnf("Mpv exited with an error: %s", err)
-		os.Exit(1)
 	}
+
+	return nil
 }

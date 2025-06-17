@@ -38,7 +38,7 @@ func Connect(address string) (*Client, error) {
 	}, nil
 }
 
-func (c *Client) PacketLoop() {
+func (c *Client) PacketLoop() error {
 	defer c.conn.Close()
 
 	ready := false
@@ -74,7 +74,7 @@ func (c *Client) PacketLoop() {
 				fmt.Sprintf("http://%s:%s", c.address, server.PortStream),
 			)
 			if err != nil {
-				log.Fatalf("Failed to open mpv: %s", err)
+				return errors.New("Failed to open mpv: " + err.Error())
 			}
 			go func() {
 				err := c.mpv.Wait()
@@ -109,6 +109,8 @@ func (c *Client) PacketLoop() {
 			ready = true
 		}
 	}
+
+	return nil
 }
 
 func (c *Client) waitEvent(event string) error {

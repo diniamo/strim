@@ -1,21 +1,26 @@
 package main
 
 import (
-	log "github.com/diniamo/glog"
+	"context"
+	"errors"
+
+	"github.com/urfave/cli/v3"
 
 	"github.com/diniamo/rife/internal/client"
 )
 
-func runClient(args []string) {
-	if len(args) < 1 {
-		log.Fatal("Missing server address")
+func runClient(ctx context.Context, cmd *cli.Command) error {
+	address := cmd.StringArg("address")
+	if address == "" {
+		return errors.New("Missing address")
 	}
-	address := args[0]
 
 	client, err := client.Connect(address)
 	if err != nil {
-		log.Fatalf("Connection failed: %s", err)
+		return errors.New("Connection failed: " + err.Error())
 	}
 
 	client.PacketLoop()
+
+	return nil
 }
