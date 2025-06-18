@@ -3,7 +3,6 @@ package mpv
 import (
 	"os"
 	"os/exec"
-	"runtime"
 	"time"
 
 	log "github.com/diniamo/glog"
@@ -16,10 +15,6 @@ func Open(args ...string) (*exec.Cmd, *gopv.Client, error) {
 		return nil, nil, err
 	}
 
-	path := "mpv"
-	if runtime.GOOS == "windows" {
-		path = "mpv.exe"
-	}
 	args = append(
 		args,
 		"--input-ipc-server=" + ipcPath,
@@ -29,7 +24,7 @@ func Open(args ...string) (*exec.Cmd, *gopv.Client, error) {
 		"--hr-seek=yes",
 	)
 	
-	cmd := exec.Command(path, args...)
+	cmd := exec.Command("mpv", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
