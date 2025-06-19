@@ -10,9 +10,9 @@ import (
 
 	log "github.com/diniamo/glog"
 	"github.com/diniamo/gopv"
-	"github.com/diniamo/rife/internal/common"
-	"github.com/diniamo/rife/internal/mpv"
-	"github.com/diniamo/rife/internal/proto"
+	"github.com/diniamo/strim/internal/common"
+	"github.com/diniamo/strim/internal/mpv"
+	"github.com/diniamo/strim/internal/proto"
 )
 
 const PortMessage = "5300"

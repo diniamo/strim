@@ -1,4 +1,4 @@
-* Rife
+* Strim
 
 CLI tool to watch local media with others. Handles both streaming and synchronization.
 
@@ -10,12 +10,12 @@ Important: the TCP ports *5300* and *5301* must point to the host's computer. Th
 
 To host a file, simply use the ~server~ subcommand, and pass the path:
 #+BEGIN_SRC shell
-rife host <file>
+strim host <file>
 #+END_SRC
 
 Then on the other end, run:
 #+BEGIN_SRC shell
-rife connect <address>
+strim connect <address>
 #+END_SRC
 where address is that of the host, without a port number.
 
@@ -23,10 +23,10 @@ where address is that of the host, without a port number.
 
 To build, run the following command:
 #+BEGIN_SRC shell
-go build ./cmd/rife
+go build ./cmd/strim
 #+END_SRC
 
 To run, run the resulting executable, or:
 #+BEGIN_SRC shell
-go run ./cmd/rife ...
+go run ./cmd/strim ...
 #+END_SRC

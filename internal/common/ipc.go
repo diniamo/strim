@@ -2,8 +2,8 @@ package common
 
 import (
 	"github.com/diniamo/gopv"
-	"github.com/diniamo/rife/internal/mpv"
-	"github.com/diniamo/rife/internal/proto"
+	"github.com/diniamo/strim/internal/mpv"
+	"github.com/diniamo/strim/internal/proto"
 )
 
 func PacketToIPC(packet *proto.Packet, debouncer mpv.Debouncer, ipc *gopv.Client) (err error) {

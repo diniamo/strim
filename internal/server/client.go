@@ -6,8 +6,8 @@ import (
 	"io"
 
 	log "github.com/diniamo/glog"
-	"github.com/diniamo/rife/internal/common"
-	"github.com/diniamo/rife/internal/proto"
+	"github.com/diniamo/strim/internal/common"
+	"github.com/diniamo/strim/internal/proto"
 )
 
 type Client struct {

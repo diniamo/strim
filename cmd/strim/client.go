@@ -6,7 +6,7 @@ import (
 
 	"github.com/urfave/cli/v3"
 
-	"github.com/diniamo/rife/internal/client"
+	"github.com/diniamo/strim/internal/client"
 )
 
 func runClient(ctx context.Context, cmd *cli.Command) error {

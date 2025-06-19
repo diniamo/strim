@@ -5,8 +5,8 @@ import (
 	"errors"
 
 	log "github.com/diniamo/glog"
-	"github.com/diniamo/rife/internal/mpv"
-	"github.com/diniamo/rife/internal/server"
+	"github.com/diniamo/strim/internal/mpv"
+	"github.com/diniamo/strim/internal/server"
 	"github.com/urfave/cli/v3"
 )
 

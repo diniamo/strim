@@ -10,7 +10,7 @@ import (
 
 func main() {
 	cmd := cli.Command{
-		Name: "rife",
+		Name: "strim",
 		Usage: "a tool to watch local media with others, that handles both streaming and synchronization",
 		HideHelpCommand: true,
 		Commands: []*cli.Command{

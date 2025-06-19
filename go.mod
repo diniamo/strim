@@ -1,4 +1,4 @@
-module github.com/diniamo/rife
+module github.com/diniamo/strim
 
 go 1.24.3
 

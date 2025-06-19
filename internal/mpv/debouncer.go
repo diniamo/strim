@@ -3,7 +3,7 @@ package mpv
 import (
 	"time"
 
-	"github.com/diniamo/rife/internal/proto"
+	"github.com/diniamo/strim/internal/proto"
 )
 
 const threshold = 100 * time.Millisecond
