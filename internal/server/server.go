@@ -32,6 +32,7 @@ type Server struct {
 
 	clients []*Client
 	initCount int
+	resumeWhenReady bool
 	aliveCount int
 	buf []byte
 }
@@ -46,9 +47,11 @@ func New(ipc *gopv.Client) *Server {
 		addressStream: ":" + PortStream,
 		ipc: ipc,
 		debouncer: make(mpv.Debouncer, 3),
-		initCount: 0,
-		aliveCount: 0,
+		
 		clients: []*Client{},
+		initCount: 0,
+		resumeWhenReady: false,
+		aliveCount: 0,
 		buf: make([]byte, 1024),
 	}
 }
@@ -121,6 +124,11 @@ func (s *Server) Listen() {
 			continue
 		}
 		
+		if !s.pause {
+			s.dispatch(invalidID, &proto.Packet{Type: proto.PacketTypePause})
+			s.resumeWhenReady = true
+		}
+		
 		client := &Client{
 			id: len(s.clients),
 			alive: true,
@@ -134,13 +142,10 @@ func (s *Server) Listen() {
 		time, err := s.ipc.Request("get_property", "playback-time")
 		if err != nil {
 			log.Errorf("Client %d: failed to get playback time: %s, disconnecting", client.id, err)
+			s.resumeWhenReady = false
 			client.Close()
 			s.aliveCount -= 1
 			continue
-		}
-		
-		if !s.pause {
-			s.dispatch(invalidID, &proto.Packet{Type: proto.PacketTypePause})
 		}
 
 		s.initCount += 1
@@ -150,6 +155,7 @@ func (s *Server) Listen() {
 		})
 		if err != nil {
 			log.Errorf("Client %d: init packet failed: %s, disconnecting", client.id, err)
+			s.resumeWhenReady = false
 			client.Close()
 			s.initCount -= 1
 			s.aliveCount -= 1
