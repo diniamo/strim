@@ -41,7 +41,6 @@ func Connect(address string) (*Client, error) {
 func (c *Client) PacketLoop() error {
 	defer c.conn.Close()
 
-	ready := false
 	for {
 		packet, err := c.conn.ReadPacket()
 		if err != nil {
@@ -56,14 +55,12 @@ func (c *Client) PacketLoop() error {
 
 		switch packet.Type {
 		case proto.PacketTypePause, proto.PacketTypeResume, proto.PacketTypeSeek:
-			if ready {
-				err = common.PacketToIPC(&packet, c.debouncer, c.ipc)
-				if err != nil {
-					log.Warnf("IPC request failed: %s", err)
-				}
+			err = common.PacketToIPC(&packet, c.debouncer, c.ipc)
+			if err != nil {
+				log.Warnf("IPC request failed: %s", err)
 			}
 		case proto.PacketTypeInit:
-			title, time, pause := proto.DecodeInit(packet.Payload)
+			title, time := proto.DecodeInit(packet.Payload)
 
 			log.Notef("Playing %s", title)
 
@@ -88,16 +85,11 @@ func (c *Client) PacketLoop() error {
 
 			c.registerHandlers()
 
-			err = c.seekWait(time)
-			if err != nil {
-				log.Errorf("Initial seek failed: %s", err)
-				continue
-			}
-
-			if !pause {
-				_, err = c.ipc.Request("set_property", "pause", false)
+			if time != 0 {
+				err = c.seekWait(time)
 				if err != nil {
-					log.Errorf("Initial resume failed: %s", err)
+					log.Errorf("Initial seek failed: %s", err)
+					continue
 				}
 			}
 			
@@ -105,8 +97,6 @@ func (c *Client) PacketLoop() error {
 			if err != nil {
 				log.Errorf("Ready packet failed: %s", err)
 			}
-
-			ready = true
 		}
 	}
 
@@ -166,7 +156,7 @@ func (c *Client) registerHandlers() {
 
 		err = c.conn.WritePacket(&proto.Packet{
 			Type: proto.PacketTypeSeek,
-			Payload: proto.EncodeFloat64(time.(float64)),
+			Payload: proto.EncodeSeek(time.(float64)),
 		})
 		if err != nil {
 			log.Errorf("Failed to send seek packet: %s", err)

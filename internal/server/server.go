@@ -104,7 +104,7 @@ func (s *Server) Listen() {
 
 		err = client.conn.WritePacket(&proto.Packet{
 			Type: proto.PacketTypeInit,
-			Payload: proto.EncodeInit(s.title, time.(float64), s.pause),
+			Payload: proto.EncodeInit(s.title, time.(float64)),
 		})
 		if err != nil {
 			log.Errorf("Client %d: init packet failed: %s, disconnecting", client.id, err)
@@ -114,10 +114,11 @@ func (s *Server) Listen() {
 		}
 		s.initCount += 1
 		
-		go client.handlePackets(s)
+		go client.packetLoop(s)
 	}
 }
 
+// Never dispatches to the server
 func (s *Server) dispatchRaw(except int, packet []byte) {
 	for _, c := range s.clients {
 		if c.id == except || !c.alive {
@@ -131,6 +132,7 @@ func (s *Server) dispatchRaw(except int, packet []byte) {
 	}
 }
 
+// Dispatches to the server, unless `except` is `serverID`
 func (s *Server) dispatch(except int, packet *proto.Packet) {
 	if except != serverID {
 		err := common.PacketToIPC(packet, s.debouncer, s.ipc)
@@ -173,7 +175,7 @@ func (s *Server) RegisterHandlers() {
 
 		s.dispatch(serverID, &proto.Packet{
 			Type: proto.PacketTypeSeek,
-			Payload: proto.EncodeFloat64(time.(float64)),
+			Payload: proto.EncodeSeek(time.(float64)),
 		})
 	})
 	if err != nil {
