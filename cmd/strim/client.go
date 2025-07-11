@@ -1,9 +1,7 @@
 package main
 
 import (
-	"errors"
 	"fmt"
-	"os"
 
 	log "github.com/diniamo/glog"
 	"github.com/diniamo/strim/internal/client"
@@ -19,15 +17,15 @@ Options:
   -h, --help  show this text
 `
 
-func runClient(args []string) error {
+func runClient(args []string) {
 	if len(args) < 1 {
 		fmt.Print(usageClient)
-		return errors.New("Not enough arguments")
+		log.Fatal("Not enough arguments")
 	}
 
 	if args[0] == "-h" || args[0] == "--help" {
 		fmt.Print(usageClient)
-		return nil
+		return
 	}
 	
 
@@ -40,27 +38,33 @@ func runClient(args []string) error {
 		"--pause",
 	)...)
 	if err != nil {
-		return errors.New("Failed to open mpv: " + err.Error())
+		log.Fatalf("Failed to open mpv: %s", err)
 	}
+
+	mpvExitChan := make(chan struct{})
 	go func() {
 		err := mpv.Wait()
-		if err == nil {
-			os.Exit(0)
-		} else {
+		if err != nil {
 			log.Warnf("Mpv exited with an error: %s", err)
-			os.Exit(1)
 		}
+
+		mpvExitChan <- struct{}{}
 	}()
 
 	client := client.New(ipc, address)
 	
 	err = client.Connect()
 	if err != nil {
-		return errors.New("Connection failed: " + err.Error())
+		log.Fatalf("Connection failed: %s", err)
 	}
 
 	client.RegisterHandlers()
 	client.PacketLoop()
 
-	return nil
+	_, err = ipc.RequestSync("quit")
+	if err == nil {
+		<-mpvExitChan
+	} else {
+		log.Warnf("Failed to quit mpv: %s", err)
+	}
 }

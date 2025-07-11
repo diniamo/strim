@@ -1,7 +1,6 @@
 package main
 
 import (
-	"errors"
 	"fmt"
 
 	log "github.com/diniamo/glog"
@@ -20,21 +19,21 @@ Options:
   -h, --help  show this text
 `
 
-func runServer(args []string) error {
+func runServer(args []string) {
 	if len(args) < 1 {
 		fmt.Print(usageServer)
-		return errors.New("Not enough arguments")
+		log.Fatal("Not enough arguments")
 	}
 
 	if args[0] == "-h" || args[0] == "--help" {
 		fmt.Print(usageServer)
-		return nil
+		return
 	}
 	
 
 	mpv, ipc, err := mpv.Open(args...)
 	if err != nil {
-		return errors.New("Failed to open mpv: " + err.Error())
+		log.Fatalf("Failed to open mpv: %s", err)
 	}
 
 	server := server.New(ipc)
@@ -45,6 +44,4 @@ func runServer(args []string) error {
 	if err != nil {
 		log.Warnf("Mpv exited with an error: %s", err)
 	}
-
-	return nil
 }
