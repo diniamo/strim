@@ -2,40 +2,42 @@ package client
 
 import (
 	"errors"
-	"fmt"
 	"io"
 	"net"
-	"os"
-	"os/exec"
 
 	log "github.com/diniamo/glog"
 	"github.com/diniamo/gopv"
-	"github.com/diniamo/strim/internal/common"
 	"github.com/diniamo/strim/internal/mpv"
 	"github.com/diniamo/strim/internal/proto"
 	"github.com/diniamo/strim/internal/server"
 )
 
 type Client struct {
-	address string
+	addressMessage string
+	addressStream string
 	conn *proto.Conn
-	debouncer mpv.Debouncer
 
-	mpv *exec.Cmd
 	ipc *gopv.Client
+	debouncer mpv.Debouncer
 }
 
-func Connect(address string) (*Client, error) {
-	conn, err := net.Dial("tcp", net.JoinHostPort(address, server.PortMessage))
+func New(ipc *gopv.Client, address string) *Client {
+	return &Client{
+		addressMessage: net.JoinHostPort(address, server.PortMessage),
+		addressStream: "http://" + net.JoinHostPort(address, server.PortStream),
+		ipc: ipc,
+		debouncer: make(mpv.Debouncer, 3),
+	}
+}
+
+func (c *Client) Connect() error {
+	conn, err := net.Dial("tcp", c.addressMessage)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	return &Client{
-		address: address,
-		conn: proto.NewConn(conn),
-		debouncer: make(mpv.Debouncer, 3),
-	}, nil
+	c.conn = proto.NewConn(conn)
+	return nil
 }
 
 func (c *Client) PacketLoop() error {
@@ -55,7 +57,7 @@ func (c *Client) PacketLoop() error {
 
 		switch packet.Type {
 		case proto.PacketTypePause, proto.PacketTypeResume, proto.PacketTypeSeek:
-			err = common.PacketToIPC(&packet, c.debouncer, c.ipc)
+			err = mpv.PacketToIPC(&packet, c.debouncer, c.ipc)
 			if err != nil {
 				log.Warnf("IPC request failed: %s", err)
 			}
@@ -64,41 +66,53 @@ func (c *Client) PacketLoop() error {
 
 			log.Notef("Playing %s", title)
 
-			c.mpv, c.ipc, err = mpv.Open(
-				"--force-media-title=" + title,
-				"--no-resume-playback", "--no-save-position-on-quit",
-				"--pause",
-				fmt.Sprintf("http://%s:%s", c.address, server.PortStream),
-			)
+			err := c.load()
 			if err != nil {
-				return errors.New("Failed to open mpv: " + err.Error())
+				log.Fatalf("Failed to connect to stream: %s", err)
 			}
-			go func() {
-				err := c.mpv.Wait()
-				if err == nil {
-					os.Exit(0)
-				} else {
-					log.Warnf("Mpv exited with an error: %s", err)
-					os.Exit(1)
-				}
-			}()
 
-			c.registerHandlers()
+			_, err = c.ipc.Request("set_property", "title", title)
+			if err != nil {
+				log.Warnf("Failed to set title: %s", err)
+			}
 
 			if time != 0 {
 				err = c.seekWait(time)
 				if err != nil {
 					log.Errorf("Initial seek failed: %s", err)
-					continue
 				}
 			}
 			
 			err = c.conn.WritePacket(&proto.Packet{Type: proto.PacketTypeReady})
 			if err != nil {
-				log.Errorf("Ready packet failed: %s", err)
+				log.Errorf("Failed to write ready packet: %s", err)
+			}
+		case proto.PacketTypeIdle:
+			_, err := c.ipc.Request("playlist-play-index", "none")
+			if err != nil {
+				log.Warnf("Failed to go to idle state: %s", err)
 			}
 		}
 	}
+
+	return nil
+}
+
+func (c *Client) load() error {
+	doneChan := make(chan struct{})
+	defer close(doneChan)
+
+	c.ipc.RegisterListener("file-loaded", func(_ map[string]any) {
+		doneChan <- struct{}{}
+	})
+
+	_, err := c.ipc.Request("loadfile", c.addressStream)
+	if err != nil {
+		return err
+	}
+
+	<-doneChan
+	c.ipc.UnregisterListener("file-loaded")
 
 	return nil
 }
@@ -107,23 +121,22 @@ func (c *Client) seekWait(time float64) error {
 	doneChan := make(chan struct{})
 	defer close(doneChan)
 	
-	err := c.ipc.RegisterListener("playback-restart", func(_ map[string]any) {
+	c.ipc.RegisterListener("playback-restart", func(_ map[string]any) {
 		doneChan <- struct{}{}
 	})
-	if err != nil {
-		return err
-	}
-
-	_, err = c.ipc.Request("set_property", "playback-time", time)
+	
+	_, err := c.ipc.Request("set_property", "playback-time", time)
 	if err != nil {
 		return err
 	}
 
 	<-doneChan
+	c.ipc.UnregisterListener("playback-restart")
+
 	return nil
 }
 
-func (c *Client) registerHandlers() {
+func (c *Client) RegisterHandlers() {
 	_, err := c.ipc.ObserveProperty("pause", func(state any) {
 		packetType := proto.PacketTypeResume
 		if state.(bool) {
@@ -143,7 +156,7 @@ func (c *Client) registerHandlers() {
 		log.Fatalf("Failed to register pause handler: %s", err)
 	}
 
-	err = c.ipc.RegisterListener("seek", func(_ map[string]any) {
+	c.ipc.RegisterListener("seek", func(_ map[string]any) {
 		if c.debouncer.IsDebounce(proto.PacketTypeSeek) {
 			return
 		}
@@ -162,7 +175,4 @@ func (c *Client) registerHandlers() {
 			log.Errorf("Failed to send seek packet: %s", err)
 		}
 	})
-	if err != nil {
-		log.Fatalf("Failed to register seek handler: %s", err)
-	}
 }

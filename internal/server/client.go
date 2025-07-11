@@ -6,7 +6,7 @@ import (
 	"io"
 
 	log "github.com/diniamo/glog"
-	"github.com/diniamo/strim/internal/common"
+	"github.com/diniamo/strim/internal/mpv"
 	"github.com/diniamo/strim/internal/proto"
 )
 
@@ -15,11 +15,6 @@ type Client struct {
 	alive bool
 	conn *proto.Conn
 	reader *bufio.Reader
-}
-
-func (c *Client) Close() {
-	c.alive = false
-	c.conn.Close()
 }
 
 func (c *Client) packetLoop(s *Server) {
@@ -37,7 +32,7 @@ func (c *Client) packetLoop(s *Server) {
 
 		switch packet.Type {
 		case proto.PacketTypePause, proto.PacketTypeResume, proto.PacketTypeSeek:
-			err = common.PacketToIPC(&packet, s.debouncer, s.ipc)
+			err = mpv.PacketToIPC(&packet, s.debouncer, s.ipc)
 			if err != nil {
 				log.Errorf("IPC request failed: %s", err)
 			}
@@ -45,7 +40,7 @@ func (c *Client) packetLoop(s *Server) {
 			s.dispatchRaw(c.id, raw)
 		case proto.PacketTypeReady:
 			log.Successf("Client %d: ready", c.id)
-				
+
 			s.initCount -= 1
 			if s.initCount == 0 {
 				s.dispatch(invalidID, &proto.Packet{Type: proto.PacketTypeResume})
@@ -54,6 +49,12 @@ func (c *Client) packetLoop(s *Server) {
 	}
 
 	c.Close()
+	s.aliveCount -= 1
 
 	log.Notef("Client %d: disconnected", c.id)
+}
+
+func (c *Client) Close() {
+	c.alive = false
+	c.conn.Close()
 }

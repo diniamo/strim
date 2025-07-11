@@ -1,12 +1,11 @@
-package common
+package mpv
 
 import (
 	"github.com/diniamo/gopv"
-	"github.com/diniamo/strim/internal/mpv"
 	"github.com/diniamo/strim/internal/proto"
 )
 
-func PacketToIPC(packet *proto.Packet, debouncer mpv.Debouncer, ipc *gopv.Client) (err error) {
+func PacketToIPC(packet *proto.Packet, debouncer Debouncer, ipc *gopv.Client) (err error) {
 	switch packet.Type {
 	case proto.PacketTypePause:
 		debouncer.Debounce(proto.PacketTypePause)

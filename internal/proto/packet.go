@@ -7,6 +7,7 @@ const (
 	PacketTypePause
 	PacketTypeResume
 	PacketTypeSeek
+	PacketTypeIdle
 )
 
 type PacketSize uint16

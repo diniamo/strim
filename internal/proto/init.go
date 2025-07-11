@@ -2,11 +2,6 @@ package proto
 
 import "encoding/binary"
 
-type Init struct {
-	Title string
-	Time float64
-}
-
 func EncodeInit(title string, time float64) []byte {
 	buf := make([]byte, 8 + len(title))
 
