@@ -6,16 +6,12 @@ import (
 
 type Conn struct {
 	conn net.Conn
-	rbuf []byte
-	wbuf []byte
+	rbuf [1024]byte
+	wbuf [1024]byte
 }
 
 func NewConn(conn net.Conn) *Conn {
-	return &Conn{
-		conn: conn,
-		rbuf: make([]byte, 1024),
-		wbuf: make([]byte, 1024),
-	}
+	return &Conn{conn: conn}
 }
 
 func (c *Conn) Close() error {
@@ -23,7 +19,7 @@ func (c *Conn) Close() error {
 }
 
 func (c *Conn) ReadRaw() ([]byte, error) {
-	n, err := c.conn.Read(c.rbuf)
+	n, err := c.conn.Read(c.rbuf[:])
 	if err != nil {
 		return nil, err
 	}
@@ -46,5 +42,5 @@ func (c *Conn) WriteRaw(packet []byte) error {
 }
 
 func (c *Conn) WritePacket(packet *Packet) error {
-	return c.WriteRaw(EncodePacket(packet, c.wbuf))
+	return c.WriteRaw(EncodePacket(packet, c.wbuf[:]))
 }

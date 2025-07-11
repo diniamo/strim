@@ -30,21 +30,15 @@ type Server struct {
 	initCount int
 	resumeWhenReady bool
 	aliveCount int
-	buf []byte
+	buf [1024]byte
 }
 
 func New(ipc *gopv.Client) *Server {
 	return &Server{
-		fs: http.Server{},
-		
 		ipc: ipc,
 		debouncer: make(mpv.Debouncer, 3),
 		
 		clients: []*Client{},
-		initCount: 0,
-		resumeWhenReady: false,
-		aliveCount: 0,
-		buf: make([]byte, 1024),
 	}
 }
 
@@ -253,6 +247,6 @@ func (s *Server) dispatch(except int, packet *proto.Packet) {
 		}
 	}
 
-	raw := proto.EncodePacket(packet, s.buf)
+	raw := proto.EncodePacket(packet, s.buf[:])
 	s.dispatchRaw(except, raw)
 }
