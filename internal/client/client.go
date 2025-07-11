@@ -88,7 +88,7 @@ func (c *Client) PacketLoop() error {
 
 			c.registerHandlers()
 
-			err = c.SeekWait(time)
+			err = c.seekWait(time)
 			if err != nil {
 				log.Errorf("Initial seek failed: %s", err)
 				continue
@@ -113,34 +113,23 @@ func (c *Client) PacketLoop() error {
 	return nil
 }
 
-func (c *Client) waitEvent(event string) error {
+func (c *Client) seekWait(time float64) error {
 	doneChan := make(chan struct{})
 	defer close(doneChan)
-
-	err := c.ipc.RegisterListener(event, func(_ map[string]any) {
+	
+	err := c.ipc.RegisterListener("playback-restart", func(_ map[string]any) {
 		doneChan <- struct{}{}
 	})
 	if err != nil {
 		return err
 	}
 
+	_, err = c.ipc.Request("set_property", "playback-time", time)
+	if err != nil {
+		return err
+	}
+
 	<-doneChan
-	c.ipc.UnregisterListener(event)
-
-	return nil
-}
-
-func (c *Client) SeekWait(time float64) error {
-	_, err := c.ipc.Request("set_property", "playback-time", time)
-	if err != nil {
-		return err
-	}
-
-	err = c.waitEvent("playback-restart")
-	if err != nil {
-		return err
-	}
-
 	return nil
 }
 
