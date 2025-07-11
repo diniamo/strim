@@ -39,7 +39,7 @@ func runServer(args []string) error {
 
 	server := server.New(ipc)
 	server.RegisterHandlers()
-	go server.Listen()
+	go server.ListenAndServe()
 
 	err = mpv.Wait()
 	if err != nil {

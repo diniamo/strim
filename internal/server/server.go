@@ -2,12 +2,8 @@ package server
 
 import (
 	"context"
-	"errors"
 	"net"
 	"net/http"
-	"os"
-
-	"time"
 
 	log "github.com/diniamo/glog"
 	"github.com/diniamo/gopv"
@@ -15,15 +11,15 @@ import (
 	"github.com/diniamo/strim/internal/proto"
 )
 
-const PortMessage = "5300"
-const PortStream = "5301"
+const Port = "5300"
 
 const serverID = -1
 const invalidID = -2
 
 type Server struct {
 	title string
-	addressStream string
+	
+	cmux *cMux
 	fs http.Server
 
 	ipc *gopv.Client
@@ -37,14 +33,10 @@ type Server struct {
 	buf []byte
 }
 
-type FileServer struct {
-	title string
-	path string
-}
-
 func New(ipc *gopv.Client) *Server {
 	return &Server{
-		addressStream: ":" + PortStream,
+		fs: http.Server{},
+		
 		ipc: ipc,
 		debouncer: make(mpv.Debouncer, 3),
 		
@@ -54,144 +46,6 @@ func New(ipc *gopv.Client) *Server {
 		aliveCount: 0,
 		buf: make([]byte, 1024),
 	}
-}
-
-func (s *Server) listenFS() {
-	err := s.fs.ListenAndServe()
-	if err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Fatalf("File server failed: %s", err)
-	}
-}
-
-func (s *FileServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	file, err := os.Open(s.path)
-	if err != nil {
-		log.Errorf("Failed to open file: %s", err)
-		return
-	}
-	defer file.Close()
-
-	http.ServeContent(w, r, s.title, time.Time{}, file)
-}
-
-func (s *Server) waitPath() (string, error) {
-	pathChan := make(chan string)
-	defer close(pathChan)
-	
-	observer, err := s.ipc.ObserveProperty("path", func(data any) {
-		path, ok := data.(string)
-		if ok {
-			pathChan <- path
-		}
-	})
-	if err != nil {
-		return "", err
-	}
-
-	path := <-pathChan
-	s.ipc.UnobserveProperty(observer)
-
-	return path, nil
-}
-
-func (s *Server) Listen() {
-	path, err := s.waitPath()
-	if err != nil {
-		log.Fatalf("Failed to get path: %s", err)
-	}
-
-	title, err := s.ipc.Request("get_property", "title")
-	if err != nil {
-		log.Warnf("Failed to get title: %s", err)
-	}
-	s.title = title.(string)
-	
-	s.fs = http.Server{Addr: s.addressStream, Handler: &FileServer{s.title, path}}
-	go s.listenFS()
-
-	listener, err := net.Listen("tcp", ":" + PortMessage)
-	if err != nil {
-		log.Fatalf("Listener failed: %s", err)
-	}
-	defer listener.Close()
-
-	log.Successf("Listening on port %s/%s", PortMessage, PortStream)
-
-	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			log.Warnf("Failed to accept connection: %s", err)
-			continue
-		}
-		
-		if !s.pause {
-			s.dispatch(invalidID, &proto.Packet{Type: proto.PacketTypePause})
-			s.resumeWhenReady = true
-		}
-		
-		client := &Client{
-			id: len(s.clients),
-			alive: true,
-			conn: proto.NewConn(conn),
-		}
-		s.clients = append(s.clients, client)
-		s.aliveCount += 1
-		
-		log.Successf("Client %d: connected", client.id)
-
-		time, err := s.ipc.Request("get_property", "playback-time")
-		if err != nil {
-			log.Errorf("Client %d: failed to get playback time: %s, disconnecting", client.id, err)
-			s.resumeWhenReady = false
-			client.Close()
-			s.aliveCount -= 1
-			continue
-		}
-
-		s.initCount += 1
-		err = client.conn.WritePacket(&proto.Packet{
-			Type: proto.PacketTypeInit,
-			Payload: proto.EncodeInit(s.title, time.(float64)),
-		})
-		if err != nil {
-			log.Errorf("Client %d: init packet failed: %s, disconnecting", client.id, err)
-			s.resumeWhenReady = false
-			client.Close()
-			s.initCount -= 1
-			s.aliveCount -= 1
-			s.dispatch(invalidID, &proto.Packet{Type: proto.PacketTypeResume})
-			continue
-		}
-		
-		go client.packetLoop(s)
-	}
-}
-
-// Never dispatches to the server
-func (s *Server) dispatchRaw(except int, packet []byte) {
-	for _, c := range s.clients {
-		if c.id == except || !c.alive {
-			continue
-		}
-
-		err := c.conn.WriteRaw(packet)
-		if err != nil {
-			log.Errorf("Client %d: failed to send packet: %s", c.id, err)
-		}
-	}
-}
-
-// Dispatches to the server, unless `except` is `serverID`
-func (s *Server) dispatch(except int, packet *proto.Packet) {
-	if except != serverID {
-		err := mpv.PacketToIPC(packet, s.debouncer, s.ipc)
-		if err != nil {
-			log.Errorf("IPC request failed: %s", err)
-		}
-	}
-
-	raw := proto.EncodePacket(packet, s.buf)
-	s.dispatchRaw(except, raw)
 }
 
 func (s *Server) RegisterHandlers() {
@@ -246,20 +100,159 @@ func (s *Server) RegisterHandlers() {
 		if err != nil {
 			log.Fatalf("Failed to get path: %s", err)
 		}
-		
+
 		s.fs.Shutdown(context.Background())
-		s.fs = http.Server{Addr: s.addressStream, Handler: &FileServer{title.(string), path.(string)}}
-		go s.listenFS()
-		
+		s.fs = http.Server{Handler: &fileServer{title.(string), path.(string)}}
+		// Shutdown closes the associated listener
+		s.cmux.stream = newCMuxListener()
+		go s.serveStream()
+	
 		time, err := s.ipc.Request("get_property", "playback-time")
 		if err != nil {
 			log.Errorf("Failed to get playback time: %s", err)
 		}
 
 		s.initCount = s.aliveCount
+		s.resumeWhenReady = true
+		
 		s.dispatch(serverID, &proto.Packet{
 			Type: proto.PacketTypeInit,
 			Payload: proto.EncodeInit(s.title, time.(float64)),
 		})
 	})
+}
+
+func (s *Server) ListenAndServe() {
+	path, err := s.waitProperty("path", func(value any) bool {
+		_, ok := value.(string)
+		return ok
+	})
+	if err != nil {
+		log.Fatalf("Failed to get path: %s", err)
+	}
+	
+	title, err := s.waitProperty("title", func(value any) bool {
+		title, ok := value.(string)
+		if ok {
+			return title != "mpv"
+		} else {
+			return false
+		}
+	})
+	if err == nil {
+		s.title = title.(string)
+	} else {
+		log.Warnf("Failed to get title: %s", err)
+	}
+
+	listener, err := net.Listen("tcp", ":" + Port)
+	if err != nil {
+		log.Fatalf("Failed to listen: %s", err)
+	}
+	
+	s.cmux = newCMux(listener)
+	defer s.cmux.Close()
+
+	s.fs.Handler = &fileServer{s.title, path.(string)}
+	go s.serveStream()
+	go s.serveMessage()
+
+	log.Successf("Listening on port %s", Port)
+	
+	err = s.cmux.Serve()
+	if err != nil {
+		log.Fatalf("Failed to serve multiplexer: %s", err)
+	}
+}
+
+func (s *Server) serveMessage() {
+	for {
+		conn, err := s.cmux.message.Accept()
+		if err != nil {
+			log.Warnf("Failed to accept connection: %s", err)
+			continue
+		}
+		
+		client := &Client{
+			id: len(s.clients),
+			alive: true,
+			conn: proto.NewConn(conn),
+		}
+		
+		log.Successf("Client %d: connected", client.id)
+
+		s.resumeWhenReady = s.resumeWhenReady || !s.pause
+		if !s.pause {
+			s.dispatch(invalidID, &proto.Packet{Type: proto.PacketTypePause})
+		}
+
+		time, err := s.ipc.Request("get_property", "playback-time")
+		if err != nil {
+			log.Errorf("Client %d: failed to get playback time: %s, disconnecting", client.id, err)
+			client.Close()
+			continue
+		}
+
+		err = client.conn.WritePacket(&proto.Packet{
+			Type: proto.PacketTypeInit,
+			Payload: proto.EncodeInit(s.title, time.(float64)),
+		})
+		if err != nil {
+			log.Errorf("Client %d: init packet failed: %s, disconnecting", client.id, err)
+			client.Close()
+			continue
+		}
+		
+		s.clients = append(s.clients, client)
+		s.aliveCount += 1
+		s.initCount += 1
+		
+		go client.packetLoop(s)
+	}	
+}
+
+func (s *Server) waitProperty(name string, condition func(any) bool) (any, error) {
+	valueChan := make(chan any)
+	defer close(valueChan)
+	
+	observer, err := s.ipc.ObserveProperty(name, func(value any) {
+		if condition(value) {
+			valueChan <- value
+		}
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	value := <-valueChan
+	s.ipc.UnobserveProperty(observer)
+
+	return value, nil
+}
+
+// Never dispatches to the server
+func (s *Server) dispatchRaw(except int, packet []byte) {
+	for _, c := range s.clients {
+		if c.id == except || !c.alive {
+			continue
+		}
+
+		err := c.conn.WriteRaw(packet)
+		if err != nil {
+			log.Errorf("Client %d: failed to send packet: %s", c.id, err)
+		}
+	}
+}
+
+// Dispatches to the server, unless `except` is `serverID`
+func (s *Server) dispatch(except int, packet *proto.Packet) {
+	if except != serverID {
+		err := mpv.PacketToIPC(packet, s.debouncer, s.ipc)
+		if err != nil {
+			log.Errorf("IPC request failed: %s", err)
+		}
+	}
+
+	raw := proto.EncodePacket(packet, s.buf)
+	s.dispatchRaw(except, raw)
 }

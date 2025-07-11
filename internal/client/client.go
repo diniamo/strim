@@ -13,8 +13,7 @@ import (
 )
 
 type Client struct {
-	addressMessage string
-	addressStream string
+	address string
 	conn *proto.Conn
 
 	ipc *gopv.Client
@@ -23,20 +22,25 @@ type Client struct {
 
 func New(ipc *gopv.Client, address string) *Client {
 	return &Client{
-		addressMessage: net.JoinHostPort(address, server.PortMessage),
-		addressStream: "http://" + net.JoinHostPort(address, server.PortStream),
+		address: net.JoinHostPort(address, server.Port),
 		ipc: ipc,
 		debouncer: make(mpv.Debouncer, 3),
 	}
 }
 
 func (c *Client) Connect() error {
-	conn, err := net.Dial("tcp", c.addressMessage)
+	conn, err := net.Dial("tcp", c.address)
+	if err != nil {
+		return err
+	}
+
+	_, err = conn.Write([]byte{server.MessageConnectionByte})
 	if err != nil {
 		return err
 	}
 
 	c.conn = proto.NewConn(conn)
+
 	return nil
 }
 
@@ -106,7 +110,7 @@ func (c *Client) load() error {
 		doneChan <- struct{}{}
 	})
 
-	_, err := c.ipc.Request("loadfile", c.addressStream)
+	_, err := c.ipc.Request("loadfile", "http://" + c.address)
 	if err != nil {
 		return err
 	}
