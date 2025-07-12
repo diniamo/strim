@@ -60,7 +60,7 @@ func (s *Server) RegisterHandlers() {
 			s.dispatch(serverID, &proto.Packet{Type: proto.PacketTypeIdle})
 		}
 
-		title, err := s.ipc.Request("get_property", "title")
+		title, err := s.ipc.Request("get_property", "media-title")
 		if err == nil {
 			s.title = title.(string)
 		} else {
