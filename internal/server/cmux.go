@@ -33,14 +33,6 @@ func newCMuxListener() cMuxListener {
 	}
 }
 
-func newCMux(listener net.Listener) *cMux {
-	return &cMux{
-		listener: listener,
-		message: newCMuxListener(),
-		stream: newCMuxListener(),
-	}
-}
-
 func (m *cMux) Serve() error {
 	for {
 		conn, err := m.listener.Accept()

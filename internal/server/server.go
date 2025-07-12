@@ -21,6 +21,9 @@ type Server struct {
 	
 	cmux *cMux
 	fs http.Server
+	// These represent the INITIAL initilization of the file server
+	fsInit bool
+	fsInitChan chan struct{}
 
 	ipc *gopv.Client
 	debouncer mpv.Debouncer
@@ -35,6 +38,8 @@ type Server struct {
 
 func New(ipc *gopv.Client) *Server {
 	return &Server{
+		fsInitChan: make(chan struct{}),
+
 		ipc: ipc,
 		debouncer: make(mpv.Debouncer, 3),
 		
@@ -43,6 +48,54 @@ func New(ipc *gopv.Client) *Server {
 }
 
 func (s *Server) RegisterHandlers() {
+	s.ipc.RegisterListener("file-loaded", func(_ map[string]any) {
+		if s.fsInit {
+			_, err := s.ipc.Request("set_property", "pause", true)
+			if err != nil {
+				log.Errorf("Failed to pause: %s", err)
+			}
+			
+			s.dispatch(serverID, &proto.Packet{Type: proto.PacketTypeIdle})
+		}
+
+		title, err := s.ipc.Request("get_property", "title")
+		if err == nil {
+			s.title = title.(string)
+		} else {
+			log.Errorf("Failed to get title: %s", err)
+		}
+
+		path, err := s.ipc.Request("get_property", "path")
+		if err != nil {
+			log.Fatalf("Failed to get path: %s", err)
+		}
+
+		s.fs.Shutdown(context.Background())
+		s.fs = http.Server{Handler: &fileServer{title.(string), path.(string)}}
+		// Shutdown closes the associated listener
+		s.cmux.stream = newCMuxListener()
+		go s.serveStream()
+
+		if s.fsInit {
+			time, err := s.ipc.Request("get_property", "playback-time")
+			if err != nil {
+				log.Errorf("Failed to get playback time: %s", err)
+			}
+
+			s.initCount = s.aliveCount
+			s.resumeWhenReady = true
+		
+			s.dispatch(serverID, &proto.Packet{
+				Type: proto.PacketTypeInit,
+				Payload: proto.EncodeInit(s.title, time.(float64)),
+			})
+		} else {
+			s.fsInitChan <- struct{}{}
+			close(s.fsInitChan)
+			s.fsInit = true
+		}
+	})
+
 	_, err := s.ipc.ObserveProperty("pause", func(state any) {
 		s.pause = state.(bool)
 
@@ -75,80 +128,23 @@ func (s *Server) RegisterHandlers() {
 			Payload: proto.EncodeSeek(time.(float64)),
 		})
 	})
-
-	s.ipc.RegisterListener("file-loaded", func(_ map[string]any) {
-		_, err := s.ipc.Request("set_property", "pause", true)
-		if err != nil {
-			log.Errorf("Failed to pause: %s", err)
-		}
-		s.dispatch(serverID, &proto.Packet{Type: proto.PacketTypeIdle})
-
-		title, err := s.ipc.Request("get_property", "title")
-		if err == nil {
-			s.title = title.(string)
-		} else {
-			log.Errorf("Failed to get title: %s", err)
-		}
-
-		path, err := s.ipc.Request("get_property", "path")
-		if err != nil {
-			log.Fatalf("Failed to get path: %s", err)
-		}
-
-		s.fs.Shutdown(context.Background())
-		s.fs = http.Server{Handler: &fileServer{title.(string), path.(string)}}
-		// Shutdown closes the associated listener
-		s.cmux.stream = newCMuxListener()
-		go s.serveStream()
-	
-		time, err := s.ipc.Request("get_property", "playback-time")
-		if err != nil {
-			log.Errorf("Failed to get playback time: %s", err)
-		}
-
-		s.initCount = s.aliveCount
-		s.resumeWhenReady = true
-		
-		s.dispatch(serverID, &proto.Packet{
-			Type: proto.PacketTypeInit,
-			Payload: proto.EncodeInit(s.title, time.(float64)),
-		})
-	})
 }
 
 func (s *Server) ListenAndServe() {
-	path, err := s.waitProperty("path", func(value any) bool {
-		_, ok := value.(string)
-		return ok
-	})
-	if err != nil {
-		log.Fatalf("Failed to get path: %s", err)
-	}
-	
-	title, err := s.waitProperty("title", func(value any) bool {
-		title, ok := value.(string)
-		if ok {
-			return title != "mpv"
-		} else {
-			return false
-		}
-	})
-	if err == nil {
-		s.title = title.(string)
-	} else {
-		log.Warnf("Failed to get title: %s", err)
-	}
-
 	listener, err := net.Listen("tcp", ":" + Port)
 	if err != nil {
 		log.Fatalf("Failed to listen: %s", err)
 	}
 	
-	s.cmux = newCMux(listener)
+	s.cmux = &cMux{
+		listener: listener,
+		message: newCMuxListener(),
+	}
 	defer s.cmux.Close()
 
-	s.fs.Handler = &fileServer{s.title, path.(string)}
-	go s.serveStream()
+	// The initial FS stream is started in the file-loaded event,
+	// and the message server relies on the title variable which is set there too.
+	<-s.fsInitChan
 	go s.serveMessage()
 
 	log.Successf("Listening on port %s", Port)
@@ -203,25 +199,6 @@ func (s *Server) serveMessage() {
 		
 		go client.packetLoop(s)
 	}	
-}
-
-func (s *Server) waitProperty(name string, condition func(any) bool) (any, error) {
-	valueChan := make(chan any)
-	defer close(valueChan)
-	
-	observer, err := s.ipc.ObserveProperty(name, func(value any) {
-		if condition(value) {
-			valueChan <- value
-		}
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	value := <-valueChan
-	s.ipc.UnobserveProperty(observer)
-
-	return value, nil
 }
 
 // Never dispatches to the server

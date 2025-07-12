@@ -9,8 +9,8 @@ import (
 	"github.com/diniamo/gopv"
 )
 
-const ipcDelay = time.Second
-const ipcAttempts = 10
+const ipcDelay = 10 * time.Millisecond
+const ipcAttempts = 100
 
 func Open(args ...string) (*exec.Cmd, *gopv.Client, error) {
 	ipcPath, err := gopv.GeneratePath()
@@ -37,8 +37,6 @@ func Open(args ...string) (*exec.Cmd, *gopv.Client, error) {
 	}
 
 	for range ipcAttempts {
-		time.Sleep(ipcDelay)
-	
 		ipcClient, err := gopv.Connect(ipcPath, func(err error) {
 			log.Errorf("IPC error: %s", err)
 		})
@@ -46,8 +44,9 @@ func Open(args ...string) (*exec.Cmd, *gopv.Client, error) {
 		if err == nil {
 			return cmd, ipcClient, nil
 		}
+		
+		time.Sleep(ipcDelay)
 	}
 		
-	cmd.Cancel()
 	return nil, nil, err
 }
