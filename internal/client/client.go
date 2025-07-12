@@ -88,7 +88,9 @@ func (c *Client) PacketLoop() error {
 			}
 			
 			err = c.conn.WritePacket(&proto.Packet{Type: proto.PacketTypeReady})
-			if err != nil {
+			if err == nil {
+				log.Success("Ready")
+			} else {
 				log.Errorf("Failed to write ready packet: %s", err)
 			}
 		case proto.PacketTypeIdle:

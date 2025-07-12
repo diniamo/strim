@@ -42,9 +42,14 @@ func (c *Client) packetLoop(s *Server) {
 			log.Successf("Client %d: ready", c.id)
 
 			s.initCount -= 1
-			if s.initCount == 0 && s.resumeWhenReady {
-				s.dispatch(invalidID, &proto.Packet{Type: proto.PacketTypeResume})
-				s.resumeWhenReady = false
+			if s.initCount == 0 {
+				if s.resumeWhenReady {
+					log.Success("All clients ready, resuming")
+					s.dispatch(invalidID, &proto.Packet{Type: proto.PacketTypeResume})
+					s.resumeWhenReady = false
+				} else {
+					log.Success("All clients ready")
+				}
 			}
 		}
 	}

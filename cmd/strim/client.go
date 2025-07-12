@@ -57,6 +57,8 @@ func runClient(args []string) {
 	if err != nil {
 		log.Fatalf("Connection failed: %s", err)
 	}
+	
+	log.Success("Connection established")
 
 	client.RegisterHandlers()
 	client.PacketLoop()

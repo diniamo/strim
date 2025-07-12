@@ -50,6 +50,8 @@ func New(ipc *gopv.Client) *Server {
 func (s *Server) RegisterHandlers() {
 	s.ipc.RegisterListener("file-loaded", func(_ map[string]any) {
 		if s.fsInit {
+			log.Note("Reinitializing")
+
 			_, err := s.ipc.Request("set_property", "pause", true)
 			if err != nil {
 				log.Errorf("Failed to pause: %s", err)
@@ -169,7 +171,7 @@ func (s *Server) serveMessage() {
 			conn: proto.NewConn(conn),
 		}
 		
-		log.Successf("Client %d: connected", client.id)
+		log.Notef("Client %d: connected", client.id)
 
 		s.resumeWhenReady = s.resumeWhenReady || !s.pause
 		if !s.pause {
