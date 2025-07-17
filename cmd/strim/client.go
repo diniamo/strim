@@ -9,6 +9,7 @@ import (
 )
 
 const usageClient = `Connect to a server.
+The address must be specified without a port number.
 
 Usage:
   strim <connect/client/c> [-h/--help] <server address> [mpv arguments...]

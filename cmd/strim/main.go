@@ -5,7 +5,7 @@ import (
 	"os"
 )
 
-const usageMain = `A tool to watch local media with others. Handles both streaming and synchronization.
+const usageMain = `CLI tool to watch local media with others. Handles both streaming and synchronization.
 
 Usage:
   strim -h/--help
