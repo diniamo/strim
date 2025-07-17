@@ -112,7 +112,7 @@ func (c *Client) load() error {
 		doneChan <- struct{}{}
 	})
 
-	_, err := c.ipc.Request("loadfile", "http://" + c.address)
+	_, err := c.ipc.RequestSync("loadfile", "http://" + c.address)
 	if err != nil {
 		return err
 	}
