@@ -73,10 +73,12 @@ func (s *Server) RegisterHandlers() {
 			log.Fatalf("Failed to get path: %s", err)
 		}
 
+		s.cmux.streamMu.Lock()
 		s.fs.Shutdown(context.Background())
 		s.fs = http.Server{Handler: &fileServer{title.(string), path.(string)}}
 		// Shutdown closes the associated listener
 		s.cmux.stream = newCMuxListener()
+		s.cmux.streamMu.Unlock()
 		go s.serveStream()
 
 		if reinit {

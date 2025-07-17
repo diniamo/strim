@@ -2,6 +2,7 @@ package server
 
 import (
 	"net"
+	"sync"
 
 	log "github.com/diniamo/glog"
 )
@@ -12,6 +13,7 @@ type cMux struct {
 	listener net.Listener
 	message cMuxListener
 	stream cMuxListener
+	streamMu sync.Mutex
 }
 
 type cMuxConn struct {
@@ -61,7 +63,10 @@ func (m *cMux) Serve() error {
 					Conn: conn,
 					b: buf[0],
 				}
+
+				m.streamMu.Lock()
 				m.stream.connChan <- c
+				m.streamMu.Unlock()
 			}
 		}()
 	}
@@ -108,6 +113,7 @@ func (c *cMuxConn) Read(buf []byte) (int, error) {
 
 func (m *cMux) Close() {
 	m.message.Close()
+	m.streamMu.Lock()
 	m.stream.Close()
 	m.listener.Close()
 }
