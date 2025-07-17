@@ -49,7 +49,8 @@ func New(ipc *gopv.Client) *Server {
 
 func (s *Server) RegisterHandlers() {
 	s.ipc.RegisterListener("file-loaded", func(_ map[string]any) {
-		if s.fsInit {
+		reinit := s.fsInit && s.aliveCount > 0
+		if reinit {
 			log.Note("Reinitializing")
 
 			_, err := s.ipc.Request("set_property", "pause", true)
@@ -78,23 +79,23 @@ func (s *Server) RegisterHandlers() {
 		s.cmux.stream = newCMuxListener()
 		go s.serveStream()
 
-		if s.fsInit {
+		if reinit {
 			time, err := s.ipc.Request("get_property", "playback-time")
 			if err != nil {
 				log.Errorf("Failed to get playback time: %s", err)
 			}
 
 			s.initCount = s.aliveCount
-			s.resumeWhenReady = true
+			s.resumeWhenReady = s.aliveCount > 0
 		
 			s.dispatch(serverID, &proto.Packet{
 				Type: proto.PacketTypeInit,
 				Payload: proto.EncodeInit(s.title, time.(float64)),
 			})
-		} else {
+		} else if !s.fsInit {
+			s.fsInit = true
 			s.fsInitChan <- struct{}{}
 			close(s.fsInitChan)
-			s.fsInit = true
 		}
 	})
 
