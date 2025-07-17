@@ -63,7 +63,7 @@ func (c *Client) PacketLoop() error {
 		case proto.PacketTypePause, proto.PacketTypeResume, proto.PacketTypeSeek:
 			err = mpv.PacketToIPC(&packet, c.debouncer, c.ipc)
 			if err != nil {
-				log.Warnf("IPC request failed: %s", err)
+				log.Errorf("IPC request failed: %s", err)
 			}
 		case proto.PacketTypeInit:
 			title, time := proto.DecodeInit(packet.Payload)
