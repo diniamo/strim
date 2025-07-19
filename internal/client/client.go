@@ -94,7 +94,7 @@ func (c *Client) PacketLoop() error {
 				log.Errorf("Failed to write ready packet: %s", err)
 			}
 		case proto.PacketTypeIdle:
-			_, err := c.ipc.Request("playlist-play-index", "none")
+			_, err := c.ipc.RequestSync("playlist-play-index", "none")
 			if err != nil {
 				log.Warnf("Failed to go to idle state: %s", err)
 			}
