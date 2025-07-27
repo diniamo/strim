@@ -20,6 +20,11 @@ Subcommands:
 `
 
 func main() {
+	if len(os.Args) < 2 {
+		fmt.Print(usageMain)
+		os.Exit(1)
+	}
+
 	switch os.Args[1] {
 	case "connect", "client", "c":
 		runClient(os.Args[2:])
