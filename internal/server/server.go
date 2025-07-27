@@ -53,10 +53,20 @@ func (s *Server) RegisterHandlers() {
 		if reinit {
 			log.Note("Reinitializing")
 
-			_, err := s.ipc.Request("set_property", "pause", true)
-			if err != nil {
-				log.Errorf("Failed to pause: %s", err)
+			pause, err := s.ipc.Request("get_property", "pause")
+			if err == nil {				
+				if !pause.(bool) {
+					_, err = s.ipc.Request("set_property", "pause", true)
+					if err != nil {
+						log.Errorf("Failed to pause: %s", err)
+					}
+					
+					s.resumeWhenReady = true
+				}
+			} else {
+				log.Errorf("Failed to get pause state: %s", err)
 			}
+
 			
 			s.dispatch(serverID, &proto.Packet{Type: proto.PacketTypeIdle})
 		}
@@ -87,9 +97,7 @@ func (s *Server) RegisterHandlers() {
 				log.Errorf("Failed to get playback time: %s", err)
 			}
 
-			s.initCount = s.aliveCount
-			s.resumeWhenReady = s.aliveCount > 0
-		
+			s.initCount = s.aliveCount		
 			s.dispatch(serverID, &proto.Packet{
 				Type: proto.PacketTypeInit,
 				Payload: proto.EncodeInit(s.title, time.(float64)),
