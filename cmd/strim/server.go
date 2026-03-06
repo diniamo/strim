@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 
-	log "github.com/diniamo/glog"
+	"github.com/diniamo/strim/internal/log"
 	"github.com/diniamo/strim/internal/mpv"
 	"github.com/diniamo/strim/internal/server"
 )
@@ -29,7 +29,7 @@ func runServer(args []string) {
 		fmt.Print(usageServer)
 		return
 	}
-	
+
 
 	mpv, ipc, err := mpv.Open(args...)
 	if err != nil {

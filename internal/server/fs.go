@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
-	log "github.com/diniamo/glog"
+	"github.com/diniamo/strim/internal/log"
 )
 
 type fileServer struct {

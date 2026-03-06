@@ -4,7 +4,7 @@ import (
 	"net"
 	"sync"
 
-	log "github.com/diniamo/glog"
+	"github.com/diniamo/strim/internal/log"
 )
 
 const MessageConnectionByte byte = '@'
@@ -93,7 +93,7 @@ func (l cMuxListener) Close() error {
 		close(l.doneChan)
 		close(l.connChan)
 	}
-	
+
 	return nil
 }
 

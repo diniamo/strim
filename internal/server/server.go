@@ -5,8 +5,8 @@ import (
 	"net"
 	"net/http"
 
-	log "github.com/diniamo/glog"
 	"github.com/diniamo/gopv"
+	"github.com/diniamo/strim/internal/log"
 	"github.com/diniamo/strim/internal/mpv"
 	"github.com/diniamo/strim/internal/proto"
 )
@@ -18,7 +18,7 @@ const invalidID = -2
 
 type Server struct {
 	title string
-	
+
 	cmux *cMux
 	fs http.Server
 	// These represent the INITIAL initilization of the file server
@@ -42,7 +42,7 @@ func New(ipc *gopv.Client) *Server {
 
 		ipc: ipc,
 		debouncer: make(mpv.Debouncer, 3),
-		
+
 		clients: []*Client{},
 	}
 }
@@ -54,20 +54,20 @@ func (s *Server) RegisterHandlers() {
 			log.Note("Reinitializing")
 
 			pause, err := s.ipc.Request("get_property", "pause")
-			if err == nil {				
+			if err == nil {
 				if !pause.(bool) {
 					_, err = s.ipc.Request("set_property", "pause", true)
 					if err != nil {
 						log.Errorf("Failed to pause: %s", err)
 					}
-					
+
 					s.resumeWhenReady = true
 				}
 			} else {
 				log.Errorf("Failed to get pause state: %s", err)
 			}
 
-			
+
 			s.dispatch(serverID, &proto.Packet{Type: proto.PacketTypeIdle})
 		}
 
@@ -97,7 +97,7 @@ func (s *Server) RegisterHandlers() {
 				log.Errorf("Failed to get playback time: %s", err)
 			}
 
-			s.initCount = s.aliveCount		
+			s.initCount = s.aliveCount
 			s.dispatch(serverID, &proto.Packet{
 				Type: proto.PacketTypeInit,
 				Payload: proto.EncodeInit(s.title, time.(float64)),
@@ -116,7 +116,7 @@ func (s *Server) RegisterHandlers() {
 		if s.pause {
 			packetType = proto.PacketTypePause
 		}
-		
+
 		if !s.debouncer.IsDebounce(packetType) {
 			s.dispatch(serverID, &proto.Packet{Type: packetType})
 		}
@@ -148,7 +148,7 @@ func (s *Server) ListenAndServe() {
 	if err != nil {
 		log.Fatalf("Failed to listen: %s", err)
 	}
-	
+
 	s.cmux = &cMux{
 		listener: listener,
 		message: newCMuxListener(),
@@ -161,7 +161,7 @@ func (s *Server) ListenAndServe() {
 	go s.serveMessage()
 
 	log.Successf("Listening on port %s", Port)
-	
+
 	err = s.cmux.Serve()
 	if err != nil {
 		log.Fatalf("Failed to serve multiplexer: %s", err)
@@ -175,13 +175,13 @@ func (s *Server) serveMessage() {
 			log.Warnf("Failed to accept connection: %s", err)
 			continue
 		}
-		
+
 		client := &Client{
 			id: len(s.clients),
 			alive: true,
 			conn: proto.NewConn(conn),
 		}
-		
+
 		log.Notef("Client %d: connected", client.id)
 
 		s.resumeWhenReady = s.resumeWhenReady || !s.pause
@@ -205,13 +205,13 @@ func (s *Server) serveMessage() {
 			client.Close()
 			continue
 		}
-		
+
 		s.clients = append(s.clients, client)
 		s.aliveCount += 1
 		s.initCount += 1
-		
+
 		go client.packetLoop(s)
-	}	
+	}
 }
 
 // Never dispatches to the server

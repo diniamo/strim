@@ -5,7 +5,7 @@ import (
 	"errors"
 	"io"
 
-	log "github.com/diniamo/glog"
+	"github.com/diniamo/strim/internal/log"
 	"github.com/diniamo/strim/internal/mpv"
 	"github.com/diniamo/strim/internal/proto"
 )
@@ -24,7 +24,7 @@ func (c *Client) packetLoop(s *Server) {
 			if !errors.Is(err, io.EOF) {
 				log.Warnf("Client %d: read error: %s", c.id, err)
 			}
-			
+
 			break
 		}
 
@@ -36,7 +36,7 @@ func (c *Client) packetLoop(s *Server) {
 			if err != nil {
 				log.Errorf("IPC request failed: %s", err)
 			}
-			
+
 			s.dispatchRaw(c.id, raw)
 		case proto.PacketTypeReady:
 			log.Successf("Client %d: ready", c.id)
@@ -45,7 +45,7 @@ func (c *Client) packetLoop(s *Server) {
 			if s.initCount == 0 {
 				if s.resumeWhenReady {
 					s.resumeWhenReady = false
-					
+
 					log.Success("All clients ready, resuming")
 					s.dispatch(invalidID, &proto.Packet{Type: proto.PacketTypeResume})
 				} else {

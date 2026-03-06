@@ -1,7 +1,5 @@
 github.com/Microsoft/go-winio v0.6.2 h1:F2VQgta7ecxGYO8k3ZZz3RS8fVIXVxONVUPlNERoyfY=
 github.com/Microsoft/go-winio v0.6.2/go.mod h1:yd8OoFMLzJbo9gZq8j5qaps8bJ9aShtEA8Ipt1oGCvU=
-github.com/diniamo/glog v0.0.0-20250612150150-d4131bb73095 h1:YuxFakaaB3S195dI63PPaydo+NmJTVhxAagPcVC6Kvg=
-github.com/diniamo/glog v0.0.0-20250612150150-d4131bb73095/go.mod h1:ENQWTBCPwUDELX8hYSCXzWX7nSNR6gKxbEVVepAm7CU=
 github.com/diniamo/gopv v0.0.0-20250711091147-a6c3fea7e676 h1:Qwh+QMdXHCHFAEWPGA1UFqd1stcCuSD1WFE6vr3ciY8=
 github.com/diniamo/gopv v0.0.0-20250711091147-a6c3fea7e676/go.mod h1:+jqp5WYGBM4VWBJWjY8YLxoFC6CAMsiyYf5ElWrcQo0=
 github.com/fatih/color v1.18.0 h1:S8gINlzdQ840/4pfAwic/ZE0djQEH3wM94VfqLTZcOM=

@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 
-	log "github.com/diniamo/glog"
+	"github.com/diniamo/strim/internal/log"
 	"github.com/diniamo/strim/internal/client"
 	"github.com/diniamo/strim/internal/mpv"
 )
@@ -28,10 +28,10 @@ func runClient(args []string) {
 		fmt.Print(usageClient)
 		return
 	}
-	
+
 
 	address := args[0]
-	
+
 	mpv, ipc, err := mpv.Open(append(
 		args[1:],
 		"--idle", "--force-window",
@@ -53,12 +53,12 @@ func runClient(args []string) {
 	}()
 
 	client := client.New(ipc, address)
-	
+
 	err = client.Connect()
 	if err != nil {
 		log.Fatalf("Connection failed: %s", err)
 	}
-	
+
 	log.Success("Connection established")
 
 	client.RegisterHandlers()

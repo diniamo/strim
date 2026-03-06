@@ -5,8 +5,8 @@ import (
 	"os/exec"
 	"time"
 
-	log "github.com/diniamo/glog"
 	"github.com/diniamo/gopv"
+	"github.com/diniamo/strim/internal/log"
 )
 
 const ipcDelay = 10 * time.Millisecond
@@ -26,7 +26,7 @@ func Open(args ...string) (*exec.Cmd, *gopv.Client, error) {
 		// since what would be the precise seek is reported anyway
 		"--hr-seek=yes",
 	)
-	
+
 	cmd := exec.Command("mpv", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
@@ -44,9 +44,9 @@ func Open(args ...string) (*exec.Cmd, *gopv.Client, error) {
 		if err == nil {
 			return cmd, ipcClient, nil
 		}
-		
+
 		time.Sleep(ipcDelay)
 	}
-		
+
 	return nil, nil, err
 }

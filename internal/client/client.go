@@ -5,8 +5,8 @@ import (
 	"io"
 	"net"
 
-	log "github.com/diniamo/glog"
 	"github.com/diniamo/gopv"
+	"github.com/diniamo/strim/internal/log"
 	"github.com/diniamo/strim/internal/mpv"
 	"github.com/diniamo/strim/internal/proto"
 	"github.com/diniamo/strim/internal/server"
@@ -86,7 +86,7 @@ func (c *Client) PacketLoop() error {
 					log.Errorf("Initial seek failed: %s", err)
 				}
 			}
-			
+
 			err = c.conn.WritePacket(&proto.Packet{Type: proto.PacketTypeReady})
 			if err == nil {
 				log.Success("Ready")
@@ -126,11 +126,11 @@ func (c *Client) load() error {
 func (c *Client) seekWait(time float64) error {
 	doneChan := make(chan struct{})
 	defer close(doneChan)
-	
+
 	c.ipc.RegisterListener("playback-restart", func(_ map[string]any) {
 		doneChan <- struct{}{}
 	})
-	
+
 	_, err := c.ipc.Request("set_property", "playback-time", time)
 	if err != nil {
 		return err
@@ -148,7 +148,7 @@ func (c *Client) RegisterHandlers() {
 		if state.(bool) {
 			packetType = proto.PacketTypePause
 		}
-		
+
 		if c.debouncer.IsDebounce(packetType) {
 			return
 		}
