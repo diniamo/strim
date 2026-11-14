@@ -2,7 +2,10 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/binary"
 	"io"
 	"net"
 	"net/http"
@@ -10,13 +13,13 @@ import (
 	"strconv"
 	"sync"
 
-	gostream "github.com/libp2p/go-libp2p-gostream"
-	"github.com/libp2p/go-libp2p/core/discovery"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/peer"
-	"github.com/libp2p/go-libp2p/p2p/discovery/routing"
+	ma "github.com/multiformats/go-multiaddr"
+	gostream "github.com/libp2p/go-libp2p-gostream"
 
 	"github.com/diniamo/gopv"
+	"github.com/LordOfTrident/ansi-go"
 )
 
 type client struct {
@@ -46,15 +49,17 @@ type client struct {
 	sendReady bool
 }
 
+const idPrompt = ansi.Bold + "Server ID" + ansi.Reset + ": "
+
 func runClient(args []string) {
 	// NOTE: input
-	var phrase  string
-	var mpvArgs []string
+	var serverID string
+	var mpvArgs  []string
 	if len(args) > 0 {
-		phrase  = args[0]
-		mpvArgs = args[1:]
+		serverID = args[0]
+		mpvArgs  = args[1:]
 	} else {
-		phrase = readLine("Phrase: ")
+		serverID = readLine(idPrompt)
 	}
 
 	// NOTE: trap setup
@@ -65,17 +70,27 @@ func runClient(args []string) {
 	c := &client{}
 
 	// NOTE: connection
-	h, idht := createHost()
+	h := createHost()
 	TrapDefer(func() {
 		h.Close()
 	})
 
-	disc          := routing.NewRoutingDiscovery(idht)
-	peerChan, err := disc.FindPeers(context.Background(), phrase, discovery.Limit(1))
-	if err != nil { Fatal("Failed to start discovery:", err) }
+	var serverInfo peer.AddrInfo
+	var err error
+	for {
+		serverInfo, err = decodeInfo(serverID)
+		if err == nil {
+			break
+		} else {
+			Error("Invalid ID")
+			serverID = readLine(idPrompt)
+		}
+	}
+
+	err = h.Connect(context.Background(), serverInfo)
+	if err != nil { Fatal("Failed to connect to server:", err) }
 
 	// NOTE: message connection
-	serverInfo := <-peerChan
 	c.messageConn, err = gostream.Dial(context.Background(), h, serverInfo.ID, messageProtocol)
 	if err != nil { Fatal("Failed to connect to server:", err) }
 
@@ -151,10 +166,18 @@ func runClient(args []string) {
 
 			switch msg.typ {
 			case messageTypePlay:
-				// IMPORTANT: we must not block the outer loop, becuase that would result in a deadlock, since we don't drain the channels
-				go func() {
-					m := msg.payload.(messagePlay)
+				m := msg.payload.(messagePlay)
 
+				c.waitTime  = m.time
+				c.waiting   = true
+				c.sendReady = true
+
+				c.debouncer.push(messageTypeSpeed)
+				c.debouncer.push(messageTypeSeek)
+
+				// IMPORTANT: we must not block the outer loop here,
+				// becuase that would result in a deadlock, since we don't drain the channels
+				go func() {
 					event, unsubscribe, err := c.ipc.Subscribe("file-loaded")
 					if err != nil { Fatal("Failed to subscribe to event:", err) }
 
@@ -174,15 +197,8 @@ func runClient(args []string) {
 						c.ipc.Request("set_property", "title", m.title)
 					}
 
-					c.debouncer.push(messageTypeSpeed)
 					c.ipc.Request("set_property", "speed", m.speed)
-
-					c.debouncer.push(messageTypeSeek)
 					c.ipc.Request("set_property", "playback-time", m.time)
-
-					c.waitTime  = m.time
-					c.waiting   = true
-					c.sendReady = true
 				}()
 
 			case messageTypePause:
@@ -282,6 +298,43 @@ func runClient(args []string) {
 	}
 
 	Note("Disconnected")
+}
+
+func decodeInfo(s string) (info peer.AddrInfo, err error) {
+	raw, err := base64.RawURLEncoding.DecodeString(s)
+	if err != nil { return info, err }
+
+	r := bytes.NewReader(raw)
+
+	// ID
+	n, err := binary.ReadUvarint(r)
+	if err != nil { return info, err }
+
+	idBytes := make([]byte, n)
+	_, err = io.ReadFull(r, idBytes)
+	if err != nil { return info, err }
+
+	info.ID = peer.ID(idBytes)
+
+	// Addresses
+	count, err := binary.ReadUvarint(r)
+	if err != nil { return info, err }
+
+	for i := uint64(0); i < count; i++ {
+		n, err = binary.ReadUvarint(r)
+		if err != nil { return info, err }
+
+		addrBytes := make([]byte, n)
+		_, err = io.ReadFull(r, addrBytes)
+		if err != nil { return info, err }
+
+		addr, err := ma.NewMultiaddrBytes(addrBytes)
+		if err != nil { return info, err }
+
+		info.Addrs = append(info.Addrs, addr)
+	}
+
+	return info, nil
 }
 
 // NOTE: http proxy

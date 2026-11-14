@@ -50,12 +50,12 @@ func readLine(prompt string) string {
 
 // NOTE: P2P
 const (
-	dhtTimeout = 5 * time.Second
-	messageProtocol   = protocol.ID("/strim/message/1")
-	streamProtocol    = protocol.ID("/strim/stream/1")
+	dhtTimeout      = 5 * time.Second
+	messageProtocol = protocol.ID("/strim/message/1")
+	streamProtocol  = protocol.ID("/strim/stream/1")
 )
 
-func createHost() (host.Host, *dht.IpfsDHT) {
+func createHost() host.Host {
 	var idht *dht.IpfsDHT
 
 	routingConfigurator := func(h host.Host) (routing.PeerRouting, error) {
@@ -127,7 +127,7 @@ func createHost() (host.Host, *dht.IpfsDHT) {
 	}
 	wg.Wait()
 
-	return h, idht
+	return h
 }
 
 

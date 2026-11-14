@@ -80,10 +80,6 @@ github.com/decred/dcrd/crypto/blake256 v1.1.0 h1:zPMNGQCm0g4QTY27fOCorQW7EryeQ/U
 github.com/decred/dcrd/crypto/blake256 v1.1.0/go.mod h1:2OfgNZ5wDpcsFmHmCK5gZTPcCXqlm2ArzUIkw9czNJo=
 github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.1 h1:5RVFMOWjMyRy8cARdy79nAmgYw3hK/4HUq48LQ6Wwqo=
 github.com/decred/dcrd/dcrec/secp256k1/v4 v4.4.1/go.mod h1:ZXNYxsqcloTdSy/rNShjYzMhyjf0LaoftYK0p+A3h40=
-github.com/diniamo/gopv v0.0.0-20260714092557-f23177be0c2c h1:gVvAGjwI27tiGXci7a/X9T09PiqqwxYYw+UOyqLwCJc=
-github.com/diniamo/gopv v0.0.0-20260714092557-f23177be0c2c/go.mod h1:K+Q5680CTXXZ82mUHyETFdCRvRsXaNgCklv5yuKOQEA=
-github.com/diniamo/gopv v0.0.0-20260727113527-9d66d59dcbed h1:YkMZXfEpW1JyFscL8Nks1IXZECbyyZLpkYiKpmDs/JY=
-github.com/diniamo/gopv v0.0.0-20260727113527-9d66d59dcbed/go.mod h1:K+Q5680CTXXZ82mUHyETFdCRvRsXaNgCklv5yuKOQEA=
 github.com/diniamo/gopv v0.0.0-20260803201708-b9d3d8730d03 h1:KbhEqFfo2dlnzC5vnrlowDyWQ4wdi0PlUfYyG6Gh5wM=
 github.com/diniamo/gopv v0.0.0-20260803201708-b9d3d8730d03/go.mod h1:K+Q5680CTXXZ82mUHyETFdCRvRsXaNgCklv5yuKOQEA=
 github.com/dunglas/httpsfv v1.1.0 h1:Jw76nAyKWKZKFrpMMcL76y35tOpYHqQPzHQiwDvpe54=
@@ -681,8 +677,8 @@ golang.org/x/sys v0.0.0-20220520151302-bc2c85ada10a/go.mod h1:oPkhp1MJrh7nUepCBc
 golang.org/x/sys v0.0.0-20220722155257-8c9f86f7a55f/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
 golang.org/x/sys v0.5.0/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
 golang.org/x/sys v0.6.0/go.mod h1:oPkhp1MJrh7nUepCBck5+mAzfO9JrbApNNgaTdGDITg=
-golang.org/x/sys v0.47.0 h1:o7XGOvZQCADBQQ4Y7VNq2dRWQR7JmOUW8Kxx4ZsNgWs=
-golang.org/x/sys v0.47.0/go.mod h1:4GL1E5IUh+htKOUEOaiffhrAeqysfVGipDYzABqnCmw=
+golang.org/x/sys v0.50.0 h1:dkKZEFTEKaLr1sjhs0WiKqoi8Jj5nHbS3Njmx1UoMJs=
+golang.org/x/sys v0.50.0/go.mod h1:hNLxWAXmnKAxqDtdwIYC4bM9oQPEecfsnNMuSxOs3og=
 golang.org/x/telemetry v0.0.0-20260409153401-be6f6cb8b1fa h1:efT73AJZfAAUV7SOip6pWGkwJDzIGiKBZGVzHYa+ve4=
 golang.org/x/telemetry v0.0.0-20260409153401-be6f6cb8b1fa/go.mod h1:kHjTxDEnAu6/Nl9lDkzjWpR+bmKfxeiRuSDlsMb70gE=
 golang.org/x/term v0.0.0-20201126162022-7de9c90e9dd1/go.mod h1:bj7SfCRtBDWHUb9snDiAeCFNEtKQo2Wmx5Cou7ajbmo=

@@ -21,7 +21,7 @@ func main() {
 	if len(os.Args) > 1 {
 		verb = os.Args[1]
 	} else {
-		Print("Do you want to ", ansi.Bold, "h", ansi.Reset, "ost or ", ansi.Bold, "c", ansi.Reset, "onnect? ")
+		ansi.Print("Do you want to ", ansi.Bold, "h", ansi.Reset, "ost or ", ansi.Bold, "c", ansi.Reset, "onnect? ")
 		answer := readAnswer()
 
 		switch answer {
