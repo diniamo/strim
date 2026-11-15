@@ -1,25 +1,24 @@
 package main
 
 import (
-	"encoding/base64"
-	"encoding/binary"
-	"errors"
+	"context"
+	"net"
 	"net/http"
 	"os/exec"
 	"strings"
 	"sync"
+	"sync/atomic"
+	"time"
 
-	gostream "github.com/libp2p/go-libp2p-gostream"
-	"github.com/libp2p/go-libp2p/core/event"
-	"github.com/libp2p/go-libp2p/core/network"
-	"github.com/libp2p/go-libp2p/core/peer"
-	ma "github.com/multiformats/go-multiaddr"
-	manet "github.com/multiformats/go-multiaddr/net"
+	"github.com/tailscale/tailcat"
+	"tailscale.com/types/logger"
 
 	"github.com/LordOfTrident/ansi-go"
 	"github.com/diniamo/gopv"
 	"golang.design/x/clipboard"
 )
+
+const invalidID int = -1
 
 type server struct {
 	// The mpv process.
@@ -69,12 +68,16 @@ type server struct {
 	// The speed of the playback.
 	// The same applies here (see above).
 	speed float64
+
+	// Whether the user requested that the media player or strim exit.
+	// Errors are ignored if this is set.
+	shuttingDown atomic.Bool
 }
 
 // The representation of a client on the server-side.
 type serverClient struct {
-	// The message stream of the client.
-	stream network.Stream
+	// The message conn of the client.
+	conn net.Conn
 	// Whether the client is ready.
 	ready bool
 }
@@ -89,8 +92,8 @@ type fileServer struct {
 
 // Command for new connections.
 type cmdClientConnected struct {
-	// The message stream of the incoming connection.
-	stream network.Stream
+	// The message conn of the incoming connection.
+	conn net.Conn
 }
 
 // Command to mark when a client is ready.
@@ -115,74 +118,78 @@ type cmdClientDisconnected struct {
 	id int
 	// The client which disconnected.
 	client *serverClient
+	// The error that caused it.
+	err error
 }
 
 func runServer(args []string) {
-	// NOTE: input
+	// SECTION: trap setup
+	TrapRegister()
+	defer TrapRun()
+
+	// SECTION: clipboard setup
+	err := clipboard.Init()
+	if err != nil { Warn("Failed to initialize clipboard:", err) }
+
+	// SECTION: input
 	if len(args) == 0 {
 		path := readLine("Path/URL: ")
 		args = []string{path}
 	}
 
-	// NOTE: trap setup
-	TrapRegister()
-	defer TrapRun()
-
-	// NOTE: clipboard setup
-	err := clipboard.Init()
-	if err != nil { Fatal("Failed to initialize clipboard:", err) }
-
-	// NOTE: server data
+	// SECTION: server data
+	fs := fileServer{}
 	s := server{
-		debouncer: newDebouncer(),
-		cmdChan:   make(chan any),
-		clients:   make(map[int]*serverClient),
+		cmdChan:    make(chan any),
+		clients:    make(map[int]*serverClient),
+		fileServer: &fs,
 	}
 
-	// NOTE: P2P setup
-	h := createHost()
+	// SECTION: Tailcat setup
+	ts := &tailcat.Server{Logf: logger.Discard}
 	TrapDefer(func() {
-		h.Close()
+		for _, c := range s.clients {
+			c.conn.Close()
+		}
+
+		ts.Close()
 	})
 
-	subscription, err := h.EventBus().Subscribe([]any{
-		new(event.EvtLocalReachabilityChanged),
-		new(event.EvtLocalAddressesUpdated),
-	})
-	if err != nil { Fatal("Failed to subscribe to host events:", err) }
+	// NOTE: the protocol specified here only refers to the in-tunnel one,
+	// the actual protocol is promoted to UDP by magicsock if possible.
+	messageListener, err := ts.Listen(context.Background(), "tcp", messageAddress)
+	if err != nil { Fatal("Failed to listen:", err) }
 
-	encodedIDChan := make(chan string)
+	streamListener, err := ts.Listen(context.Background(), "tcp", streamAddress)
+	if err != nil { Fatal("Failed to listen:", err) }
+
 	go func() {
-		eventChan    := subscription.Out()
-		reachability := network.ReachabilityUnknown
 		for {
-			e := <-eventChan
-			if e, ok := e.(event.EvtLocalReachabilityChanged); ok {
-				reachability = e.Reachability
+			conn, err := messageListener.Accept()
+			if err != nil {
+				if !s.shuttingDown.Load() { Fatal("Failed to accept connection:", err) }
+				break
 			}
 
-			if reachability != network.ReachabilityUnknown {
-				var filtered []ma.Multiaddr
-				for _, addr := range h.Addrs() {
-					if manet.IsPublicAddr(addr) && hasGoodTransport(addr) {
-						filtered = append(filtered, addr)
-					}
-				}
-
-				encoded := encodeInfo(peer.AddrInfo{ID: h.ID(), Addrs: filtered})
-				encodedIDChan <- encoded
-			}
+			s.cmdChan <- cmdClientConnected{conn}
 		}
 	}()
 
-	var previousID string
+	go func() {
+		hs := http.Server{Handler: s.fileServer}
+		err := hs.Serve(streamListener)
+		if !s.shuttingDown.Load() && err != nil { Fatal("File server failed:", err) }
+	}()
 
-	// NOTE: message handler
-	h.SetStreamHandler(messageProtocol, func(stream network.Stream) {
-		s.cmdChan <- cmdClientConnected{stream}
-	})
+	address := string(ts.TailcatAddr())
+	clipboardChan := clipboard.Write(clipboard.FmtText, []byte(address))
+	clipboardText := ""
+	if clipboardChan != nil {
+		clipboardText = " (copied to clipboard)"
+	}
+	ansi.Eprintln(ansi.Bold, "Address", ansi.Reset, clipboardText, ": ", ansi.Dim, address)
 
-	// NOTE: mpv
+	// SECTION: mpv
 	setupPath()
 
 	// IMPORTANT: imprecise seeks may result in multiple seconds of desync,
@@ -211,25 +218,21 @@ func runServer(args []string) {
 	speedChan, _, err := s.ipc.ObserveProperty("speed")
 	if err != nil { Error("Failed to observe property:", err) }
 
-	for {
+	// SECTION: graceful shutdown
+	exitChan := make(chan struct{})
+	TrapDefer(func() {
+		exitChan <- struct{}{}
+		s.shuttingDown.Store(true)
+	})
+
+	// SECTION: main loop
+	outer: for {
 		select {
-		case encodedID := <-encodedIDChan:
-			if encodedID != previousID {
-				clipboardChan := clipboard.Write(clipboard.FmtText, []byte(encodedID))
-
-				var clipboardText string
-				if clipboardChan != nil {
-					clipboardText = " (copied to clipboard)"
-				}
-				ansi.Eprintln(ansi.Bold, "New ID", ansi.Reset, clipboardText, ": ", ansi.Dim, encodedID)
-
-				previousID = encodedID
-			}
 		case cmd := <-s.cmdChan:
 			switch cmd := cmd.(type) {
 			case cmdClientConnected:
 				s.waitCount += 1
-				s.waitStart()
+				s.waitStart(nil)
 
 				var time float64
 				timeAny := <-s.ipc.Request("get_property", "playback-time")
@@ -239,13 +242,20 @@ func runServer(args []string) {
 					time = timeAny.(float64)
 				}
 
-				sendMessage(cmd.stream, messageTypePlay, messagePlay{s.url, s.title, time, s.speed})
+				err := sendMessage(cmd.conn, messageTypePlay, messagePlay{s.url, s.title, time, s.speed})
+				if err != nil {
+					Warn("Failed to send initial message to new client:", err)
+					cmd.conn.Close()
+					s.waitCount -= 1
+					s.waitCheck()
+					break
+				}
 
 				id := s.clientID
 				s.clientID += 1
 
 				client := &serverClient{
-					stream: cmd.stream,
+					conn: cmd.conn,
 					ready:  false,
 				}
 				s.clients[id] = client
@@ -263,52 +273,58 @@ func runServer(args []string) {
 			case cmdClientAction:
 				if s.waiting {
 					if cmd.typ == messageTypeSpeed {
-						s.debouncer.push(messageTypeSpeed)
-						s.ipc.Request("set_property", "speed", cmd.payload.(float64))
+						s.speed = cmd.payload.(float64)
+						s.debouncer.debounceNext(messageTypeSpeed, s.speed)
+						s.ipc.Request("set_property", "speed", s.speed)
 
-						for id, c := range s.clients {
-							if id != cmd.id {
-								sendMessage(c.stream, cmd.typ, cmd.payload)
-							}
-						}
+						s.sendAll(cmd.typ, cmd.payload, cmd.id)
 					}
 				} else {
 					switch cmd.typ {
 					case messageTypePause:
-						s.debouncer.push(messageTypePause)
+						s.pause = true
+						s.debouncer.debounceNext(messageTypePause, nil)
 						s.ipc.Request("set_property", "pause", true)
+						s.sendAll(cmd.typ, cmd.payload, cmd.id)
 					case messageTypeResume:
-						s.debouncer.push(messageTypeResume)
+						s.pause = false
+						s.debouncer.debounceNext(messageTypeResume, nil)
 						s.ipc.Request("set_property", "pause", false)
+						s.sendAll(cmd.typ, cmd.payload, cmd.id)
 					case messageTypeSeek:
-						s.waitAll()
-						s.debouncer.push(messageTypeSeek)
-						s.ipc.Request("set_property", "playback-time", cmd.payload.(float64))
+						time := cmd.payload.(float64)
+						s.debouncer.debounceNext(messageTypeSeek, nil)
+						s.ipc.Request("set_property", "playback-time", time)
+						s.waitAll(&time)
 					case messageTypeSpeed:
-						s.debouncer.push(messageTypeSpeed)
-						s.ipc.Request("set_property", "speed", cmd.payload.(float64))
-					}
-
-					for id, c := range s.clients {
-						if id != cmd.id {
-							sendMessage(c.stream, cmd.typ, cmd.payload)
-						}
+						s.speed = cmd.payload.(float64)
+						s.debouncer.debounceNext(messageTypeSpeed, s.speed)
+						s.ipc.Request("set_property", "speed", s.speed)
+						s.sendAll(cmd.typ, cmd.payload, cmd.id)
 					}
 				}
 
 			case cmdClientDisconnected:
+				delete(s.clients, cmd.id)
+
 				if !cmd.client.ready {
 					s.waitCount -= 1
 					s.waitCheck()
 				}
 
-				delete(s.clients, cmd.id)
-				Notef("Client %d disconnected", cmd.id)
+				if !s.shuttingDown.Load() {
+					switch {
+					case filterConnectionError(cmd.err) == nil:
+						Notef("Client %d disconnected", cmd.id)
+					default:
+						Warnf("Client %d disconnected: %s", cmd.id, unwrapOpError(cmd.err))
+					}
+				}
 			}
 
 		case <-loadedChan:
 			if len(s.clients) > 0 {
-				s.waitAll()
+				s.waitAll(nil)
 			}
 
 			rawPathAny := <-s.ipc.Request("get_property", "path")
@@ -316,7 +332,7 @@ func runServer(args []string) {
 			rawPath := rawPathAny.(string)
 
 			var protocol, path string
-			components := strings.Split(rawPath, "://")
+			components := strings.SplitN(rawPath, "://", 2)
 			if len(components) > 1 {
 				protocol = components[0]
 				path     = components[1]
@@ -327,22 +343,9 @@ func runServer(args []string) {
 
 			switch protocol {
 			case "file":
-				if s.fileServer != nil {
-					s.fileServer.mu.Lock()
-					s.fileServer.path = path
-					s.fileServer.mu.Unlock()
-				} else {
-					s.fileServer = &fileServer{path: path}
-
-					go func() {
-						listener, err := gostream.Listen(h, streamProtocol)
-						if err != nil { Fatal("Failed to listen for stream connections:", err) }
-
-						server := http.Server{Handler: s.fileServer}
-						err = server.Serve(listener)
-						if err != nil && !errors.Is(err, http.ErrServerClosed) { Fatal("File server failed:", err) }
-					}()
-				}
+				s.fileServer.mu.Lock()
+				s.fileServer.path = path
+				s.fileServer.mu.Unlock()
 
 				titleAny := <-s.ipc.Request("get_property", "media-title")
 				if err, ok := titleAny.(error); ok {
@@ -353,11 +356,9 @@ func runServer(args []string) {
 				s.url = ""
 
 			case "http", "https":
-				if s.fileServer != nil {
-					s.fileServer.mu.Lock()
-					s.fileServer.path = ""
-					s.fileServer.mu.Unlock()
-				}
+				s.fileServer.mu.Lock()
+				s.fileServer.path = ""
+				s.fileServer.mu.Unlock()
 
 				s.title = ""
 				s.url   = rawPath
@@ -376,9 +377,7 @@ func runServer(args []string) {
 				}
 
 				msg := messagePlay{s.url, s.title, time, s.speed}
-				for _, c := range s.clients {
-					sendMessage(c.stream, messageTypePlay, msg)
-				}
+				s.sendAll(messageTypePlay, msg, invalidID)
 			}
 
 		case <-restartChan:
@@ -386,32 +385,21 @@ func runServer(args []string) {
 			s.waitCheck()
 
 		case <-seekChan:
-			if s.debouncer.pop(messageTypeSeek) {
+			if s.debouncer.debounceOrUpdate(messageTypeSeek, nil) {
 				break
 			}
 
 			if s.waiting {
-				s.debouncer.push(messageTypeSeek)
+				s.debouncer.debounceNext(messageTypeSeek, nil)
 				s.ipc.Request("set_property", "playback-time", s.waitTime)
 				break
 			}
 
-			if len(s.clients) <= 0 {
+			if len(s.clients) == 0 {
 				break
 			}
 
-			s.waitAll()
-
-			timeAny := <-s.ipc.Request("get_property", "playback-time")
-			if err, ok := timeAny.(error); ok {
-				Error("Failed to get playback time:", err)
-				break
-			}
-			time := timeAny.(float64)
-
-			for _, c := range s.clients {
-				sendMessage(c.stream, messageTypeSeek, time)
-			}
+			s.waitAll(nil)
 
 		case pauseAny := <-pauseChan:
 			pause := pauseAny.(bool)
@@ -423,17 +411,17 @@ func runServer(args []string) {
 				typ = messageTypeResume
 			}
 
-			if s.debouncer.pop(typ) {
+			if s.debouncer.debounceOrUpdate(typ, nil) {
 				break
 			}
 
 			if s.waiting {
 				if !pause {
 					s.pause = true
-					s.debouncer.push(messageTypePause)
+					s.debouncer.debounceNext(messageTypePause, nil)
 					s.ipc.Request("set_property", "pause", true)
 
-					s.debouncer.push(messageTypeSeek)
+					s.debouncer.debounceNext(messageTypeSeek, nil)
 					s.ipc.Request("set_property", "playback-time", s.waitTime)
 				}
 
@@ -442,52 +430,21 @@ func runServer(args []string) {
 
 			s.pause = pause
 
-			for _, c := range s.clients {
-				sendMessage(c.stream, typ, nil)
-			}
+			s.sendAll(typ, nil, invalidID)
 
 		case speedAny := <-speedChan:
-			if s.debouncer.pop(messageTypeSpeed) {
+			s.speed = speedAny.(float64)
+
+			if s.debouncer.debounceOrUpdate(messageTypeSpeed, s.speed) {
 				break
 			}
 
-			s.speed = speedAny.(float64)
+			s.sendAll(messageTypeSpeed, s.speed, invalidID)
 
-			for _, c := range s.clients {
-				sendMessage(c.stream, messageTypeSpeed, s.speed)
-			}
+		case <-exitChan:
+			break outer
 		}
 	}
-}
-
-func hasGoodTransport(addr ma.Multiaddr) bool {
-	for _, proto := range addr.Protocols() {
-		if proto.Code == ma.P_QUIC_V1 || proto.Code == ma.P_TCP {
-			return true
-		}
-	}
-
-	return false
-}
-
-func encodeInfo(info peer.AddrInfo) string {
-	var buf []byte
-
-	// ID
-	id := []byte(info.ID)
-
-	buf = binary.AppendUvarint(buf, uint64(len(id)))
-	buf = append(buf, id...)
-
-	// Addresses
-	buf = binary.AppendUvarint(buf, uint64(len(info.Addrs)))
-	for _, addr := range info.Addrs {
-		bytes := addr.Bytes()
-		buf = binary.AppendUvarint(buf, uint64(len(bytes)))
-		buf = append(buf, bytes...)
-	}
-
-	return base64.RawURLEncoding.EncodeToString(buf)
 }
 
 func (s *fileServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -503,10 +460,16 @@ func (s *fileServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *server) serve(id int, c *serverClient) {
-	var data [4096]byte
+	var data [maxMessageSize]byte
+	var breakErr error
+
 	for {
-		typ, payload, err := waitMessage(c.stream, data[:])
-		if err != nil { break }
+		c.conn.SetReadDeadline(time.Now().Add(heartbeatTimeout))
+		typ, payload, err := waitMessage(c.conn, data[:])
+		if err != nil {
+			breakErr = err
+			break
+		}
 
 		forward := false
 		switch typ {
@@ -524,57 +487,70 @@ func (s *server) serve(id int, c *serverClient) {
 		}
 	}
 
-	c.stream.Close()
-
-	s.cmdChan <- cmdClientDisconnected{id, c}
+	c.conn.Close()
+	s.cmdChan <- cmdClientDisconnected{id, c, breakErr}
 }
 
-func (s *server) waitStart() {
+func (s *server) waitStart(time *float64) {
 	if !s.waiting {
 		s.waiting    = true
 		s.waitResume = !s.pause
 
 		if s.waitResume {
 			s.pause = true
-			s.debouncer.push(messageTypePause)
+			s.debouncer.debounceNext(messageTypePause, nil)
 			s.ipc.Request("set_property", "pause", true)
 		}
 
-		timeAny := <-s.ipc.Request("get_property", "playback-time")
-		if err, ok := timeAny.(error); ok {
-			Error("Failed to get playback time:", err)
+		if time != nil {
+			s.waitTime = *time
 		} else {
-			s.waitTime = timeAny.(float64)
+			timeAny := <-s.ipc.Request("get_property", "playback-time")
+			if err, ok := timeAny.(error); ok {
+				Error("Failed to get playback time:", err)
+			} else {
+				s.waitTime = timeAny.(float64)
+			}
 		}
 
-		for _, c := range s.clients {
-			sendMessage(c.stream, messageTypeWaitStart, s.waitTime)
-		}
+		s.sendAll(messageTypeWaitStart, s.waitTime, invalidID)
 	}
 }
 
-func (s *server) waitAll() {
+func (s *server) waitAll(time *float64) {
 	s.ready = false
 	for _, c := range s.clients {
 		c.ready = false
 	}
 
 	s.waitCount = len(s.clients)
-	s.waitStart()
+	s.waitStart(time)
 }
 
 func (s *server) waitCheck() {
-	if s.waiting && s.ready && s.waitCount <= 0 {
+	if s.waiting && s.ready && s.waitCount == 0 {
 		s.waiting = false
 
 		if s.waitResume {
 			s.pause = false
-			s.debouncer.push(messageTypeResume)
+			s.debouncer.debounceNext(messageTypeResume, nil)
 			s.ipc.Request("set_property", "pause", false)
 		}
 
-		for _, c := range s.clients {
-			sendMessage(c.stream, messageTypeWaitDone, s.waitResume)
+		s.sendAll(messageTypeWaitDone, s.waitResume, invalidID)
+	}
+}
+
+func (s *server) sendAll(typ messageType, payload any, except int) {
+	var buf [maxMessageSize]byte
+	data := marshalMessage(buf[:], typ, payload)
+
+	for id, c := range s.clients {
+		if id == except { continue }
+
+		_, err := c.conn.Write(data)
+		if err != nil {
+			c.conn.Close()
 		}
 	}
 }

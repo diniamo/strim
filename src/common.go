@@ -2,29 +2,22 @@ package main
 
 import (
 	"bufio"
-	"context"
 	"encoding/binary"
+	"errors"
+	"fmt"
 	"io"
+	"math"
+	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sync"
 	"time"
 
-	"github.com/eiannone/keyboard"
-
-	p2p "github.com/libp2p/go-libp2p"
-	dht "github.com/libp2p/go-libp2p-kad-dht"
-	"github.com/libp2p/go-libp2p/core/host"
-	"github.com/libp2p/go-libp2p/core/peer"
-	"github.com/libp2p/go-libp2p/core/protocol"
-	"github.com/libp2p/go-libp2p/core/routing"
-	circuitproto "github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/proto"
-
 	"github.com/diniamo/gopv"
+	"github.com/eiannone/keyboard"
 )
 
-// NOTE: terminal
+// SECTION: terminal
 func readAnswer() byte {
 	keyChan, err := keyboard.GetKeys(1)
 	if err != nil { Fatal("Failed to setup terminal:", err) }
@@ -48,99 +41,36 @@ func readLine(prompt string) string {
 	return scanner.Text()
 }
 
-// NOTE: P2P
+// SECTION: ports
 const (
-	dhtTimeout      = 5 * time.Second
-	messageProtocol = protocol.ID("/strim/message/1")
-	streamProtocol  = protocol.ID("/strim/stream/1")
+	messagePort uint16 = 1
+	streamPort  uint16 = 2
+
+	messageAddress = ":1"
+	streamAddress  = ":2"
 )
 
-func createHost() host.Host {
-	var idht *dht.IpfsDHT
+// SECTION: message protocol
+const (
+	headerSize     = 3
+	maxMessageSize = headerSize + math.MaxUint16 + 1
 
-	routingConfigurator := func(h host.Host) (routing.PeerRouting, error) {
-		instance, err := dht.New(context.Background(), h, dht.Mode(dht.ModeAuto))
-		if err != nil { return nil, err }
+	heartbeatInterval = 1 * time.Second
+	heartbeatTimeout  = 3 * heartbeatInterval
+)
 
-		idht = instance
-		return instance, err
-	}
+var (
+	// The byteOrder used for encoding and decoding message data.
+	byteOrder = binary.LittleEndian
 
-	peerSource := func(ctx context.Context, num int) <-chan peer.AddrInfo {
-		ch := make(chan peer.AddrInfo)
-
-		go func() {
-			defer close(ch)
-
-			h     := idht.Host()
-			store := h.Peerstore()
-
-			for _, node := range idht.RoutingTable().ListPeers() {
-				supported, err := store.SupportsProtocols(node, circuitproto.ProtoIDv2Hop)
-				if err != nil || len(supported) == 0 { continue }
-
-				addrs := store.Addrs(node)
-				info  := peer.AddrInfo{ID: node, Addrs: addrs}
-
-				select {
-				case ch <- info:
-					break
-				case <-ctx.Done():
-					return
-				}
-			}
-		}()
-
-		return ch
-	}
-
-	// NOTE: create host
-	h, err := p2p.New(
-		p2p.NATPortMap(),
-		p2p.EnableHolePunching(),
-		p2p.EnableAutoNATv2(),
-		p2p.Routing(routingConfigurator),
-		p2p.EnableAutoRelayWithPeerSource(peerSource),
-	)
-	if err != nil { Fatal("Failed to create P2P host:", err) }
-
-	// NOTE: bootstrap DHT
-	err = idht.Bootstrap(context.Background())
-	if err != nil { Fatal("DHT boostrap failed:", err) }
-
-	peers, err := peer.AddrInfosFromP2pAddrs(dht.DefaultBootstrapPeers...)
-	if err != nil { Fatal("Failed to convert P2P addresses to infos:", err) }
-
-	var wg sync.WaitGroup
-	for _, info := range peers {
-		wg.Add(1)
-
-		go func() {
-			ctx, cancel := context.WithTimeout(context.Background(), dhtTimeout)
-
-			err = h.Connect(ctx, info)
-			if err != nil { Warnf("Bootstrap peer %s unreachable: %s", info.ID, err) }
-
-			cancel()
-			wg.Done()
-		}()
-	}
-	wg.Wait()
-
-	return h
-}
-
-
-// NOTE: message protocol
-// The byteOrder used for encoding and decoding message data.
-var byteOrder = binary.LittleEndian
+	errInvalidMessage = errors.New("invalid message")
+)
 
 type messageType byte
-// IMPORTANT: the message types that may be debounced must be kept at the start.
 const (
 	// The media should be paused.
 	// No payload.
-	messageTypePause = iota
+	messageTypePause messageType = iota
 	// The media should be resumed.
 	// No payload.
 	messageTypeResume
@@ -166,7 +96,20 @@ const (
 	// The client should stop waiting, and resume the media, if it was playing before the wait started.
 	// Payload: resume bool
 	messageTypeWaitDone
+	// The client sends this to the server periodically, otherwise it will be disconnected.
+	// See heartbeatInterval and heartbeatTimeout.
+	messageTypeHeartbeat
+
+	// The number of mesage types.
+	messageTypeCount
 )
+
+type invalidMessageTypeError struct {
+	typ messageType
+}
+func (e *invalidMessageTypeError) Error() string {
+	return fmt.Sprint("invalid message type: ", e.typ)
+}
 
 // A message.
 type message struct {
@@ -184,20 +127,20 @@ type messagePlay struct {
 	time, speed float64
 }
 
-var messageMarshallers []func([]byte, any) int = []func([]byte, any) int{
-	nilMarshaller,
-	nilMarshaller,
-	func(data []byte, payload any) int {
+var messageMarshallers = [...]func([]byte, any) int{
+	messageTypePause: nilMarshaller,
+	messageTypeResume: nilMarshaller,
+	messageTypeSeek: func(data []byte, payload any) int {
 		time := payload.(float64)
 		binary.Encode(data, byteOrder, time)
 		return 8
 	},
-	func(data []byte, payload any) int {
+	messageTypeSpeed: func(data []byte, payload any) int {
 		speed := payload.(float64)
 		binary.Encode(data, byteOrder, speed)
 		return 8
 	},
-	func(data []byte, payload any) int {
+	messageTypePlay: func(data []byte, payload any) int {
 		msg := payload.(messagePlay)
 
 		i := 0
@@ -233,37 +176,38 @@ var messageMarshallers []func([]byte, any) int = []func([]byte, any) int{
 
 		return i
 	},
-	nilMarshaller,
-	func(data []byte, payload any) int {
+	messageTypeReady: nilMarshaller,
+	messageTypeWaitStart: func(data []byte, payload any) int {
 		time := payload.(float64)
 		binary.Encode(data, byteOrder, time)
 		return 8
 	},
-	func(data []byte, payload any) int {
+	messageTypeWaitDone: func(data []byte, payload any) int {
 		resume := payload.(bool)
 		binary.Encode(data, byteOrder, resume)
 		return 1
 	},
+	messageTypeHeartbeat: nilMarshaller,
 }
 
 var messageUnmarshallers []func([]byte) any = []func([]byte) any{
-	nilUnmarshaller,
-	nilUnmarshaller,
-	func(data []byte) any {
+	messageTypePause: nilUnmarshaller,
+	messageTypeResume: nilUnmarshaller,
+	messageTypeSeek: func(data []byte) any {
 		var time float64
 		binary.Decode(data, byteOrder, &time)
 		return time
 	},
-	func(data []byte) any {
+	messageTypeSpeed: func(data []byte) any {
 		var speed float64
 		binary.Decode(data, byteOrder, &speed)
 		return speed
 	},
-	func(data []byte) any {
+	messageTypePlay: func(data []byte) any {
 		var msg messagePlay
 
 		i := 0
-		var j int
+		j := 0
 
 		// url
 		j = i + 2
@@ -297,65 +241,94 @@ var messageUnmarshallers []func([]byte) any = []func([]byte) any{
 
 		return msg
 	},
-	nilUnmarshaller,
-	func(data []byte) any {
+	messageTypeReady: nilUnmarshaller,
+	messageTypeWaitStart: func(data []byte) any {
 		var time float64
 		binary.Decode(data, byteOrder, &time)
 		return time
 	},
-	func(data []byte) any {
+	messageTypeWaitDone: func(data []byte) any {
 		var resume bool
 		binary.Decode(data, byteOrder, &resume)
 		return resume
 	},
+	messageTypeHeartbeat: nilUnmarshaller,
 }
 
 func nilMarshaller(_ []byte, _ any) int { return 0 }
 func nilUnmarshaller(_ []byte)      any { return nil }
 
-func sendMessage(w io.Writer, typ messageType, payload any) {
-	var data [4096]byte
+func marshalMessage(buf []byte, typ messageType, payload any) []byte {
+	n := messageMarshallers[typ](buf[3:], payload)
 
-	n := messageMarshallers[typ](data[3:], payload)
+	binary.Encode(buf[1:3], byteOrder, uint16(n))
+	buf[0] = byte(typ)
 
-	binary.Encode(data[1:3], byteOrder, uint16(n))
-	data[0] = byte(typ)
-
-	w.Write(data[:3 + n])
+	return buf[:3 + n]
 }
 
-func waitMessage(r io.Reader, data []byte) (messageType, any, error) {
-	err := readExact(r, data[:3])
-	if err != nil { return 0, nil, err }
+func sendMessage(c net.Conn, typ messageType, payload any) (err error) {
+	defer func() {
+		if recover() != nil {
+			err = errInvalidMessage
+		}
+	}()
+
+	var buf [maxMessageSize]byte
+	data := marshalMessage(buf[:], typ, payload)
+
+	_, err = c.Write(data)
+	return
+}
+
+func waitMessage(c net.Conn, data []byte) (typ messageType, payload any, err error) {
+	defer func() {
+		if recover() != nil {
+			err = errInvalidMessage
+		}
+	}()
+
+	_, err = io.ReadFull(c, data[:3])
+	if err != nil { return }
 
 	var size uint16
 	binary.Decode(data[1:3], byteOrder, &size)
 
 	payloadData := data[3:3 + size]
-	err = readExact(r, payloadData)
-	if err != nil { return 0, nil, err }
+	_, err = io.ReadFull(c, payloadData)
+	if err != nil { return }
 
-	typ     := data[0]
-	payload := messageUnmarshallers[typ](payloadData)
-
-	return messageType(typ), payload, nil
-}
-
-func readExact(r io.Reader, data []byte) error {
-	n := 0
-	for n < len(data) {
-		read, err := r.Read(data[n:])
-		if err != nil {
-			return err
-		}
-
-		n += read
+	typ = messageType(data[0])
+	if !isValidType(typ) {
+		err = &invalidMessageTypeError{typ}
+		return
 	}
+	payload = messageUnmarshallers[typ](payloadData)
 
-	return nil
+	return
 }
 
-// NOTE: mpv
+func isValidType(typ messageType) bool {
+	return typ < messageTypeCount
+}
+
+func filterConnectionError(err error) error {
+	if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
+		return nil
+	} else {
+		return err
+	}
+}
+
+func unwrapOpError(err error) error {
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		return opErr.Err
+	}
+	return err
+}
+
+// SECTION: mpv
 func setupPath() {
 	strim, err := os.Executable()
 	if err != nil {
@@ -387,28 +360,61 @@ func mpv(args ...string) (*exec.Cmd, *gopv.Client) {
 	return cmd, client
 }
 
-// NOTE: debouncer
-// A debouncer used for ignoring events that were caused by our own requests.
-type debouncer []int
-
-// The number of message types that may be debounced.
-// IMPORTANT: this has to be kept up to date.
-const debounceTypes = 4
-
-func newDebouncer() debouncer {
-	return make(debouncer, debounceTypes)
+// SECTION: debouncer
+// A debouncer used for ignoring events that are the result our own requests.
+// A counter is not reliable for property-change events, because those aren't
+// fired if you set the property to its current value, so we check for equality
+// in the case of pause/resume and speed, and use a counter for seek, because
+// seek events are always sent (even for in-place seeks).
+type debouncer struct {
+	pause bool
+	speed float64
+	seekCount int
 }
 
-func (d debouncer) push(typ messageType) {
-	d[typ] += 1
-}
+// NOTE: mpv speed values are clamped to above 0.01.
+// Add an extra 0 to be safe.
+const epsilon float64 = 0.001
 
-func (d debouncer) pop(typ messageType) bool {
-	n := d[typ]
-	if n > 0 {
-		d[typ] = n - 1
-		return true
-	} else {
-		return false
+func (d *debouncer) debounceNext(typ messageType, payload any) {
+	switch typ {
+	case messageTypePause:
+		d.pause = true
+	case messageTypeResume:
+		d.pause = false
+	case messageTypeSpeed:
+		d.speed = payload.(float64)
+	case messageTypeSeek:
+		d.seekCount += 1
 	}
+}
+
+func (d *debouncer) debounceOrUpdate(typ messageType, payload any) bool {
+	switch typ {
+	case messageTypePause:
+		old := d.pause
+		d.pause = true
+		return old
+	case messageTypeResume:
+		old := d.pause
+		d.pause = false
+		return !old
+	case messageTypeSpeed:
+		value := payload.(float64)
+		if math.Abs(value - d.speed) > epsilon {
+			d.speed = value
+			return false
+		} else {
+			return true
+		}
+	case messageTypeSeek:
+		if d.seekCount > 0 {
+			d.seekCount -= 1
+			return true
+		} else {
+			return false
+		}
+	}
+
+	panic("unreachable")
 }

@@ -1,25 +1,25 @@
 package main
 
 import (
-	"bufio"
-	"bytes"
 	"context"
-	"encoding/base64"
-	"encoding/binary"
+	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
+	"net/http/httputil"
+	"net/url"
 	"os/exec"
 	"strconv"
-	"sync"
+	"strings"
+	"sync/atomic"
+	"time"
 
-	"github.com/libp2p/go-libp2p/core/host"
-	"github.com/libp2p/go-libp2p/core/peer"
-	ma "github.com/multiformats/go-multiaddr"
-	gostream "github.com/libp2p/go-libp2p-gostream"
-
-	"github.com/diniamo/gopv"
 	"github.com/LordOfTrident/ansi-go"
+	"github.com/diniamo/gopv"
+	"github.com/tailscale/tailcat"
+	"golang.design/x/clipboard"
+	"tailscale.com/types/logger"
 )
 
 type client struct {
@@ -27,8 +27,6 @@ type client struct {
 	messageConn net.Conn
 	// The channel used for incoming messages.
 	receiveChan chan message
-	// The channel used for outgoing messages.
-	sendChan chan message
 
 	// The mpv process.
 	mpv *exec.Cmd
@@ -36,8 +34,6 @@ type client struct {
 	ipc *gopv.Client
 	// The debouncer used for ignoring events that were caused by our own requests.
 	debouncer debouncer
-	// The port of the local HTTP proxy for serving local (to the server) media.
-	port string
 
 	// Whether the session is currently waiting.
 	// All media controls should be blocked, except speed.
@@ -47,67 +43,85 @@ type client struct {
 	waitTime float64
 	// Whether a ready message should be sent on the next playback-restart event.
 	sendReady bool
+
+	// Whether the user requested that the media player or strim exit.
+	// Errors are ignored if this is set.
+	shuttingDown atomic.Bool
 }
 
-const idPrompt = ansi.Bold + "Server ID" + ansi.Reset + ": "
+const (
+	addressPrompt = ansi.Bold + "Server address" + ansi.Reset + ": "
+	dialTimeout   = 20 * time.Second
+)
 
 func runClient(args []string) {
-	// NOTE: input
-	var serverID string
-	var mpvArgs  []string
-	if len(args) > 0 {
-		serverID = args[0]
-		mpvArgs  = args[1:]
-	} else {
-		serverID = readLine(idPrompt)
-	}
-
-	// NOTE: trap setup
+	// SECTION: trap setup
 	TrapRegister()
 	defer TrapRun()
 
-	// NOTE: client data
-	c := &client{}
+	// SECTION: clipboard setup
+	err := clipboard.Init()
+	if err != nil { Warn("Failed to initialize clipboard:", err) }
 
-	// NOTE: connection
-	h := createHost()
-	TrapDefer(func() {
-		h.Close()
-	})
+	// SECTION: client data
+	c := &client{
+		receiveChan: make(chan message),
+	}
 
-	var serverInfo peer.AddrInfo
-	var err error
-	for {
-		serverInfo, err = decodeInfo(serverID)
-		if err == nil {
-			break
+	// SECTION: input
+	var address string
+	var mpvArgs []string
+	if len(args) > 0 {
+		address = args[0]
+		mpvArgs = args[1:]
+	} else {
+		bytes := clipboard.Read(clipboard.FmtText)
+		if bytes != nil {
+			address = string(bytes)
+		}
+
+		if isValidAddress(address) {
+			Note("Using address from clipboard")
 		} else {
-			Error("Invalid ID")
-			serverID = readLine(idPrompt)
+			address = readLine(addressPrompt)
 		}
 	}
 
-	err = h.Connect(context.Background(), serverInfo)
-	if err != nil { Fatal("Failed to connect to server:", err) }
+	for {
+		address = strings.TrimSpace(address)
+		if isValidAddress(address) { break }
+		Error("Invalid address")
+		address = readLine(addressPrompt)
+	}
 
-	// NOTE: message connection
-	c.messageConn, err = gostream.Dial(context.Background(), h, serverInfo.ID, messageProtocol)
-	if err != nil { Fatal("Failed to connect to server:", err) }
+	// SECTION: connection
+	tc := &tailcat.Client{
+		Server: tailcat.Addr(address),
+		Logf: logger.Discard,
+	}
+	TrapDefer(func() {
+		tc.Close()
+	})
 
+	dialCtx, dialCancel := context.WithTimeout(context.Background(), dialTimeout)
+	c.messageConn, err = tc.DialTCPPort(dialCtx, messagePort)
+	dialCancel()
+	if err != nil { Fatal("Failed to connect to server:", err) }
 	Success("Connected")
 
-	c.receiveChan = make(chan message)
-	var done sync.Mutex
+	TrapDefer(func() {
+		c.messageConn.Close()
+	})
+
 	go func() {
-		var data [4096]byte
+		var data [maxMessageSize]byte
 
 		for {
-			// NOTE: done is unlocked by the consumer
-			// this avoids overwriting the data that might still be used
-			done.Lock()
-
+			// NOTE: nothing references data in the payload,
+			// because numbers obviously don't, and string(...) creates a copy in Go.
 			typ, payload, err := waitMessage(c.messageConn, data[:])
 			if err != nil {
+				c.receiveChan <- message{messageTypeCount, err}
 				close(c.receiveChan)
 				break
 			}
@@ -116,9 +130,24 @@ func runClient(args []string) {
 		}
 	}()
 
-	c.sendChan = make(chan message)
+	proxyListener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil { Fatal("Failed to start proxy listener:", err) }
+	proxyPort := strconv.Itoa(proxyListener.Addr().(*net.TCPAddr).Port)
 
-	// NOTE: mpv
+	go func() {
+		proxy := httputil.NewSingleHostReverseProxy(&url.URL{Scheme: "http", Host: "strim"})
+		proxy.ErrorLog = log.New(io.Discard, "", 0)
+		proxy.Transport = &http.Transport{
+			DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+				return tc.DialTCPPort(ctx, streamPort)
+			},
+		}
+
+		err := http.Serve(proxyListener, proxy)
+		if err != nil { Fatal("Failed to serve proxy:", err) }
+	}()
+
+	// SECTION: mpv
 	setupPath()
 
 	c.mpv, c.ipc = mpv(append(mpvArgs,
@@ -138,11 +167,9 @@ func runClient(args []string) {
 		TrapExit(0)
 	}()
 
-	c.debouncer = make(debouncer, debounceTypes)
-
 	// NOTE: mpv sends these even if no file is loaded
-	c.debouncer.push(messageTypePause)
-	c.debouncer.push(messageTypeSpeed)
+	c.debouncer.debounceNext(messageTypePause, nil)
+	c.debouncer.debounceNext(messageTypeSpeed, float64(1))
 
 	restartChan, _, err := c.ipc.Subscribe("playback-restart")
 	if err != nil { Fatal("Failed to subscribe to event:", err) }
@@ -156,11 +183,21 @@ func runClient(args []string) {
 	speedChan, _, err := c.ipc.ObserveProperty("speed")
 	if err != nil { Error("Failed to observe property:", err) }
 
-	// NOTE: message loop
+	// SECTION: graceful shutdown
+	TrapDefer(func() {
+		c.shuttingDown.Store(true)
+	})
+
+	// SECTION: heartbeat
+	heartbeatTicker := time.NewTicker(heartbeatInterval)
+
+	// SECTION: message loop
+	var breakErr error
 	outer: for {
 		select {
-		case msg, ok := <- c.receiveChan:
-			if !ok {
+		case msg := <- c.receiveChan:
+			if err, ok := msg.payload.(error); ok {
+				breakErr = err
 				break outer
 			}
 
@@ -172,78 +209,81 @@ func runClient(args []string) {
 				c.waiting   = true
 				c.sendReady = true
 
-				c.debouncer.push(messageTypeSpeed)
-				c.debouncer.push(messageTypeSeek)
+				c.debouncer.debounceNext(messageTypeSpeed, m.speed)
+				c.debouncer.debounceNext(messageTypeSeek, nil)
 
-				// IMPORTANT: we must not block the outer loop here,
-				// becuase that would result in a deadlock, since we don't drain the channels
-				go func() {
-					event, unsubscribe, err := c.ipc.Subscribe("file-loaded")
-					if err != nil { Fatal("Failed to subscribe to event:", err) }
+				url := m.url
+				if url == "" {
+					url = "http://127.0.0.1:" + proxyPort
+				}
 
-					path := m.url
-					if path == "" {
-						if c.port == "" {
-							c.port = startProxy(h, serverInfo.ID)
-						}
+				var options string
+				if m.title != "" {
+					options = fmt.Sprintf("force-media-title=%s,speed=%f,start=%f", m.title, m.speed, m.time)
+				} else {
+					options = fmt.Sprintf("speed=%f,start=%f", m.speed, m.time)
+				}
 
-						path = "http://localhost:" + c.port
-					}
-					c.ipc.Request("loadfile", path)
-					<-event
-					unsubscribe()
-
-					if m.title != "" {
-						c.ipc.Request("set_property", "title", m.title)
-					}
-
-					c.ipc.Request("set_property", "speed", m.speed)
-					c.ipc.Request("set_property", "playback-time", m.time)
-				}()
+				c.ipc.Request("loadfile", url, "replace", -1, options)
 
 			case messageTypePause:
-				c.debouncer.push(messageTypePause)
+				c.debouncer.debounceNext(messageTypePause, nil)
 				c.ipc.Request("set_property", "pause", true)
 			case messageTypeResume:
-				c.debouncer.push(messageTypeResume)
+				c.debouncer.debounceNext(messageTypeResume, nil)
 				c.ipc.Request("set_property", "pause", false)
 			case messageTypeSeek:
 				c.sendReady = true
-				c.debouncer.push(messageTypeSeek)
+
+				c.debouncer.debounceNext(messageTypePause, nil)
+				c.ipc.Request("set_property", "pause", true)
+
+				c.debouncer.debounceNext(messageTypeSeek, nil)
 				c.ipc.Request("set_property", "playback-time", msg.payload.(float64))
 			case messageTypeSpeed:
-				c.debouncer.push(messageTypeSpeed)
-				c.ipc.Request("set_property", "speed", msg.payload.(float64))
+				speed := msg.payload.(float64)
+				c.debouncer.debounceNext(messageTypeSpeed, speed)
+				c.ipc.Request("set_property", "speed", speed)
 
 			case messageTypeWaitStart:
-				c.waiting  = true
-				c.waitTime = msg.payload.(float64)
+				c.waitTime  = msg.payload.(float64)
+				c.waiting   = true
+				c.sendReady = true
+
+				c.ipc.Request("set_property", "pause", true)
+				c.ipc.Request("set_property", "playback-time", c.waitTime)
 			case messageTypeWaitDone:
 				c.waiting = false
 				if msg.payload.(bool) {
-					c.debouncer.push(messageTypeResume)
+					c.debouncer.debounceNext(messageTypeResume, nil)
 					c.ipc.Request("set_property", "pause", false)
 				}
 			}
 
-			done.Unlock()
-
-		case msg := <-c.sendChan:
-			sendMessage(c.messageConn, msg.typ, msg.payload)
+		case <-heartbeatTicker.C:
+			err := sendMessage(c.messageConn, messageTypeHeartbeat, nil)
+			if err != nil {
+				breakErr = err
+				break outer
+			}
 
 		case <-restartChan:
 			if c.sendReady {
 				c.sendReady = false
-				sendMessage(c.messageConn, messageTypeReady, nil)
+				err := sendMessage(c.messageConn, messageTypeReady, nil)
+				if err != nil {
+					breakErr = err
+					break outer
+				}
 			}
 
 		case <-seekChan:
-			if c.debouncer.pop(messageTypeSeek) {
+			if c.debouncer.debounceOrUpdate(messageTypeSeek, nil) {
 				break
 			}
 
 			if c.waiting {
-				c.debouncer.push(messageTypeSeek)
+				c.debouncer.debounceNext(messageTypeSeek, nil)
 				c.ipc.Request("set_property", "playback-time", c.waitTime)
 				break
 			}
@@ -257,7 +297,11 @@ func runClient(args []string) {
 			}
 			time := timeAny.(float64)
 
-			sendMessage(c.messageConn, messageTypeSeek, time)
+			err := sendMessage(c.messageConn, messageTypeSeek, time)
+			if err != nil {
+				breakErr = err
+				break outer
+			}
 
 		case pauseAny := <-pauseChan:
 			pause := pauseAny.(bool)
@@ -269,116 +313,51 @@ func runClient(args []string) {
 				typ = messageTypeResume
 			}
 
-			if c.debouncer.pop(typ) {
+			if c.debouncer.debounceOrUpdate(typ, nil) {
 				break
 			}
 
 			if c.waiting {
 				if !pause {
-					c.debouncer.push(messageTypePause)
+					c.debouncer.debounceNext(messageTypePause, nil)
 					c.ipc.Request("set_property", "pause", true)
 
-					c.debouncer.push(messageTypeSeek)
+					c.debouncer.debounceNext(messageTypeSeek, nil)
 					c.ipc.Request("set_property", "playback-time", c.waitTime)
 				}
 
 				break
 			}
 
-			sendMessage(c.messageConn, typ, nil)
+			err := sendMessage(c.messageConn, typ, nil)
+			if err != nil {
+				breakErr = err
+				break outer
+			}
 
 		case speedAny := <-speedChan:
-			if c.debouncer.pop(messageTypeSpeed) {
+			speed := speedAny.(float64)
+
+			if c.debouncer.debounceOrUpdate(messageTypeSpeed, speed) {
 				break
 			}
 
-			speed := speedAny.(float64)
-			sendMessage(c.messageConn, messageTypeSpeed, speed)
+			err := sendMessage(c.messageConn, messageTypeSpeed, speed)
+			if err != nil {
+				breakErr = err
+				break outer
+			}
 		}
 	}
 
-	Note("Disconnected")
+	if c.shuttingDown.Load() || filterConnectionError(breakErr) == nil {
+		Note("Disconnected")
+	} else {
+		Error("Disconnected:", unwrapOpError(breakErr))
+	}
 }
 
-func decodeInfo(s string) (info peer.AddrInfo, err error) {
-	raw, err := base64.RawURLEncoding.DecodeString(s)
-	if err != nil { return info, err }
-
-	r := bytes.NewReader(raw)
-
-	// ID
-	n, err := binary.ReadUvarint(r)
-	if err != nil { return info, err }
-
-	idBytes := make([]byte, n)
-	_, err = io.ReadFull(r, idBytes)
-	if err != nil { return info, err }
-
-	info.ID = peer.ID(idBytes)
-
-	// Addresses
-	count, err := binary.ReadUvarint(r)
-	if err != nil { return info, err }
-
-	for i := uint64(0); i < count; i++ {
-		n, err = binary.ReadUvarint(r)
-		if err != nil { return info, err }
-
-		addrBytes := make([]byte, n)
-		_, err = io.ReadFull(r, addrBytes)
-		if err != nil { return info, err }
-
-		addr, err := ma.NewMultiaddrBytes(addrBytes)
-		if err != nil { return info, err }
-
-		info.Addrs = append(info.Addrs, addr)
-	}
-
-	return info, nil
-}
-
-// NOTE: http proxy
-type httpProxy struct {
-	host       host.Host
-	serverID   peer.ID
-}
-func (p *httpProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	conn, err := gostream.Dial(context.Background(), p.host, p.serverID, streamProtocol)
-	if err != nil { Fatal("Failed to connect to server:", err) }
-	defer conn.Close()
-
-	err = r.Write(conn)
-	if err != nil {
-		Error("HTTP request failed:", err)
-		return
-	}
-
-	response, err := http.ReadResponse(bufio.NewReader(conn), r)
-	if err != nil {
-		Error("Failed to read HTTP response:", err)
-		return
-	}
-	defer response.Body.Close()
-
-	header := w.Header()
-	for k, v := range response.Header {
-		header[k] = v
-	}
-
-	w.WriteHeader(response.StatusCode)
-	io.Copy(w, response.Body)
-}
-
-func startProxy(h host.Host, id peer.ID) string {
-	listener, err := net.Listen("tcp", ":0")
-	if err != nil { Fatal("Failed to start proxy listener:", err) }
-
-	go func() {
-		proxy := httpProxy{h, id}
-		err   := http.Serve(listener, &proxy)
-		if err != nil { Fatal("Failed to serve proxy:", err) }
-	}()
-
-	port := listener.Addr().(*net.TCPAddr).Port
-	return strconv.Itoa(port)
+func isValidAddress(address string) bool {
+	_, err := tailcat.ParseAddr(tailcat.Addr(address))
+	return err == nil
 }

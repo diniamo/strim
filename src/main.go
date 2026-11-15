@@ -11,7 +11,7 @@ const usageText = `CLI tool to watch local media with others. Handles both strea
 
 Usage:
   strim
-  strim host [mpv arguments...]
+  strim [host] [mpv arguments...]
   strim connect [phrase [mpv arguments...]]
   strim -h/--help
 `
@@ -44,7 +44,11 @@ func main() {
 	case "-h", "--help":
 		usage(0)
 	default:
-		usage(1)
+		if len(os.Args) > 1 {
+			runServer(os.Args[1:])
+		} else {
+			runServer([]string{verb})
+		}
 	}
 }
 
