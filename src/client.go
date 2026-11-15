@@ -154,7 +154,7 @@ func runClient(args []string) {
 		// IMPORTANT: imprecise seeks may result in multiple seconds of desync,
 		// since what would be the precise seek is reported anyway
 		"--hr-seek",
-		"--force-window", "--idle",
+		"--idle", "--force-window", "--keep-open",
 		"--no-resume-playback", "--no-save-position-on-quit",
 		"--pause",
 		"--quiet",

@@ -194,7 +194,7 @@ func runServer(args []string) {
 
 	// IMPORTANT: imprecise seeks may result in multiple seconds of desync,
 	// since what would be the precise seek is reported anyway
-	s.mpv, s.ipc = mpv(append(args, "--hr-seek", "--quiet")...)
+	s.mpv, s.ipc = mpv(append(args, "--hr-seek", "--keep-open", "--quiet")...)
 	TrapDefer(func() {
 		s.mpv.Process.Kill()
 	})
