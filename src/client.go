@@ -238,8 +238,9 @@ func runClient(args []string) {
 				c.debouncer.debounceNext(messageTypePause, nil)
 				c.ipc.Request("set_property", "pause", true)
 
-				c.debouncer.debounceNext(messageTypeSeek, nil)
-				c.ipc.Request("set_property", "playback-time", msg.payload.(float64))
+				time := msg.payload.(float64)
+				c.debouncer.debounceNext(messageTypeSeek, time)
+				c.ipc.Request("set_property", "playback-time", time)
 			case messageTypeSpeed:
 				speed := msg.payload.(float64)
 				c.debouncer.debounceNext(messageTypeSpeed, speed)
@@ -250,7 +251,10 @@ func runClient(args []string) {
 				c.waiting   = true
 				c.sendReady = true
 
+				c.debouncer.debounceNext(messageTypePause, nil)
 				c.ipc.Request("set_property", "pause", true)
+
+				c.debouncer.debounceNext(messageTypeSeek, c.waitTime)
 				c.ipc.Request("set_property", "playback-time", c.waitTime)
 			case messageTypeWaitDone:
 				c.waiting = false
