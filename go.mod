@@ -4,7 +4,7 @@ go 1.27.1
 
 require (
 	github.com/LordOfTrident/ansi-go v0.0.0-20240312190243-261416cdeb0b
-	github.com/diniamo/gopv v0.0.0-20260803201708-b9d3d8730d03
+	github.com/diniamo/gopv v0.0.0-20261121075711-0892f95665d5
 	github.com/eiannone/keyboard v0.0.0-20220611211555-0d226195f203
 	github.com/tailscale/tailcat v0.7.0
 	golang.design/x/clipboard v0.8.0

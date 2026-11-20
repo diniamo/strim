@@ -171,10 +171,10 @@ func runClient(args []string) {
 	c.debouncer.debounceNext(messageTypePause, nil)
 	c.debouncer.debounceNext(messageTypeSpeed, float64(1))
 
-	restartChan, _, err := c.ipc.Subscribe("playback-restart")
-	if err != nil { Fatal("Failed to subscribe to event:", err) }
-
-	seekChan, _, err := c.ipc.Subscribe("seek")
+	// IMPORTANT: subscribe to these at the same time, so we get an ordering guarantee.
+	// Order may be random with separate subscriptions, because if multiple are pending
+	// when the select statement is reached, one is selected at random.
+	eventChan, _, err := c.ipc.Subscribe("playback-restart", "seek")
 	if err != nil { Fatal("Failed to subscribe to event:", err) }
 
 	pauseChan, _, err := c.ipc.ObserveProperty("pause")
@@ -271,40 +271,42 @@ func runClient(args []string) {
 				break outer
 			}
 
-		case <-restartChan:
-			if c.sendReady {
-				c.sendReady = false
-				err := sendMessage(c.messageConn, messageTypeReady, nil)
+		case event := <-eventChan:
+			switch event.Name {
+			case "playback-restart":
+				if c.sendReady {
+					c.sendReady = false
+					err := sendMessage(c.messageConn, messageTypeReady, nil)
+					if err != nil {
+						breakErr = err
+						break outer
+					}
+				}
+			case "seek":
+				if c.debouncer.debounceOrUpdate(messageTypeSeek, nil) {
+					break
+				}
+
+				if c.waiting {
+					c.debouncer.debounceNext(messageTypeSeek, nil)
+					c.ipc.Request("set_property", "playback-time", c.waitTime)
+					break
+				}
+
+				c.sendReady = true
+
+				timeAny := <-c.ipc.Request("get_property", "playback-time")
+				if err, ok := timeAny.(error); ok {
+					Error("Failed to get playback time:", err)
+					break
+				}
+				time := timeAny.(float64)
+
+				err := sendMessage(c.messageConn, messageTypeSeek, time)
 				if err != nil {
 					breakErr = err
 					break outer
 				}
-			}
-
-		case <-seekChan:
-			if c.debouncer.debounceOrUpdate(messageTypeSeek, nil) {
-				break
-			}
-
-			if c.waiting {
-				c.debouncer.debounceNext(messageTypeSeek, nil)
-				c.ipc.Request("set_property", "playback-time", c.waitTime)
-				break
-			}
-
-			c.sendReady = true
-
-			timeAny := <-c.ipc.Request("get_property", "playback-time")
-			if err, ok := timeAny.(error); ok {
-				Error("Failed to get playback time:", err)
-				break
-			}
-			time := timeAny.(float64)
-
-			err := sendMessage(c.messageConn, messageTypeSeek, time)
-			if err != nil {
-				breakErr = err
-				break outer
 			}
 
 		case pauseAny := <-pauseChan:

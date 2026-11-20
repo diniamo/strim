@@ -72,6 +72,10 @@ github.com/digitalocean/go-smbios v0.0.0-20180907143718-390a4f403a8e h1:vUmf0yez
 github.com/digitalocean/go-smbios v0.0.0-20180907143718-390a4f403a8e/go.mod h1:YTIHhz/QFSYnu/EhlF2SpU2Uk+32abacUYA5ZPljz1A=
 github.com/diniamo/gopv v0.0.0-20260803201708-b9d3d8730d03 h1:KbhEqFfo2dlnzC5vnrlowDyWQ4wdi0PlUfYyG6Gh5wM=
 github.com/diniamo/gopv v0.0.0-20260803201708-b9d3d8730d03/go.mod h1:K+Q5680CTXXZ82mUHyETFdCRvRsXaNgCklv5yuKOQEA=
+github.com/diniamo/gopv v0.0.0-20261120234205-a1d00c0620f6 h1:9l03BO+DuMy0T3dAUWY3ZlgKJDtP4hvmtH33uWBAbtI=
+github.com/diniamo/gopv v0.0.0-20261120234205-a1d00c0620f6/go.mod h1:K+Q5680CTXXZ82mUHyETFdCRvRsXaNgCklv5yuKOQEA=
+github.com/diniamo/gopv v0.0.0-20261121075711-0892f95665d5 h1:cRfMfAZrp0nPr7WhGzbSQ1kSDTYqnkuqb0IoyaZ9JZM=
+github.com/diniamo/gopv v0.0.0-20261121075711-0892f95665d5/go.mod h1:K+Q5680CTXXZ82mUHyETFdCRvRsXaNgCklv5yuKOQEA=
 github.com/djherbis/times v1.6.0 h1:w2ctJ92J8fBvWPxugmXIv7Nz7Q3iDMKNx9v5ocVH20c=
 github.com/djherbis/times v1.6.0/go.mod h1:gOHeRAz2h+VJNZ5Gmc/o7iD9k4wW7NMVqieYCY99oc0=
 github.com/ebitengine/purego v0.10.1 h1:dewVBCBT2GaMu1SrNTYxQhgQBethzfhiwvZiLGP/qyY=

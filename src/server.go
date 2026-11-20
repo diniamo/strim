@@ -203,13 +203,10 @@ func runServer(args []string) {
 		TrapExit(0)
 	}()
 
-	loadedChan, _, err := s.ipc.Subscribe("file-loaded")
-	if err != nil { Fatal("Failed to subscribe to event:", err) }
-
-	restartChan, _, err := s.ipc.Subscribe("playback-restart")
-	if err != nil { Fatal("Failed to subscribe to event:", err) }
-
-	seekChan, _, err := s.ipc.Subscribe("seek")
+	// IMPORTANT: subscribe to these at the same time, so we get an ordering guarantee.
+	// Order may be random with separate subscriptions, because if multiple are pending
+	// when the select statement is reached, one is selected at random.
+	eventChan, _, err := s.ipc.Subscribe("file-loaded", "playback-restart", "seek")
 	if err != nil { Fatal("Failed to subscribe to event:", err) }
 
 	pauseChan, _, err := s.ipc.ObserveProperty("pause")
@@ -322,84 +319,87 @@ func runServer(args []string) {
 				}
 			}
 
-		case <-loadedChan:
-			if len(s.clients) > 0 {
+		case event := <-eventChan:
+			switch event.Name {
+			case "file-loaded":
+				if len(s.clients) > 0 {
+					s.waitAll(nil)
+				}
+
+				rawPathAny := <-s.ipc.Request("get_property", "path")
+				if err, ok := rawPathAny.(error); ok { Fatal("Failed to get path:", err) }
+				rawPath := rawPathAny.(string)
+
+				var protocol, path string
+				components := strings.SplitN(rawPath, "://", 2)
+				if len(components) > 1 {
+					protocol = components[0]
+					path     = components[1]
+				} else {
+					protocol = "file"
+					path     = components[0]
+				}
+
+				switch protocol {
+				case "file":
+					s.fileServer.mu.Lock()
+					s.fileServer.path = path
+					s.fileServer.mu.Unlock()
+
+					titleAny := <-s.ipc.Request("get_property", "media-title")
+					if err, ok := titleAny.(error); ok {
+						Error("Failed to get title:", err)
+					} else {
+						s.title = titleAny.(string)
+					}
+					s.url = ""
+
+				case "http", "https":
+					s.fileServer.mu.Lock()
+					s.fileServer.path = ""
+					s.fileServer.mu.Unlock()
+
+					s.title = ""
+					s.url   = rawPath
+
+				default:
+					Fatal("Unsupported protocol:", protocol)
+				}
+
+				if len(s.clients) > 0 {
+					var time float64
+					timeAny := <-s.ipc.Request("get_property", "playback-time")
+					if err, ok := timeAny.(error); ok {
+						Error("Failed to get playback time:", err)
+					} else {
+						time = timeAny.(float64)
+					}
+
+					msg := messagePlay{s.url, s.title, time, s.speed}
+					s.sendAll(messageTypePlay, msg, invalidID)
+				}
+
+			case "playback-restart":
+				s.ready = true
+				s.waitCheck()
+
+			case "seek":
+				if s.debouncer.debounceOrUpdate(messageTypeSeek, nil) {
+					break
+				}
+
+				if s.waiting {
+					s.debouncer.debounceNext(messageTypeSeek, nil)
+					s.ipc.Request("set_property", "playback-time", s.waitTime)
+					break
+				}
+
+				if len(s.clients) == 0 {
+					break
+				}
+
 				s.waitAll(nil)
 			}
-
-			rawPathAny := <-s.ipc.Request("get_property", "path")
-			if err, ok := rawPathAny.(error); ok { Fatal("Failed to get path:", err) }
-			rawPath := rawPathAny.(string)
-
-			var protocol, path string
-			components := strings.SplitN(rawPath, "://", 2)
-			if len(components) > 1 {
-				protocol = components[0]
-				path     = components[1]
-			} else {
-				protocol = "file"
-				path     = components[0]
-			}
-
-			switch protocol {
-			case "file":
-				s.fileServer.mu.Lock()
-				s.fileServer.path = path
-				s.fileServer.mu.Unlock()
-
-				titleAny := <-s.ipc.Request("get_property", "media-title")
-				if err, ok := titleAny.(error); ok {
-					Error("Failed to get title:", err)
-				} else {
-					s.title = titleAny.(string)
-				}
-				s.url = ""
-
-			case "http", "https":
-				s.fileServer.mu.Lock()
-				s.fileServer.path = ""
-				s.fileServer.mu.Unlock()
-
-				s.title = ""
-				s.url   = rawPath
-
-			default:
-				Fatal("Unsupported protocol:", protocol)
-			}
-
-			if len(s.clients) > 0 {
-				var time float64
-				timeAny := <-s.ipc.Request("get_property", "playback-time")
-				if err, ok := timeAny.(error); ok {
-					Error("Failed to get playback time:", err)
-				} else {
-					time = timeAny.(float64)
-				}
-
-				msg := messagePlay{s.url, s.title, time, s.speed}
-				s.sendAll(messageTypePlay, msg, invalidID)
-			}
-
-		case <-restartChan:
-			s.ready = true
-			s.waitCheck()
-
-		case <-seekChan:
-			if s.debouncer.debounceOrUpdate(messageTypeSeek, nil) {
-				break
-			}
-
-			if s.waiting {
-				s.debouncer.debounceNext(messageTypeSeek, nil)
-				s.ipc.Request("set_property", "playback-time", s.waitTime)
-				break
-			}
-
-			if len(s.clients) == 0 {
-				break
-			}
-
-			s.waitAll(nil)
 
 		case pauseAny := <-pauseChan:
 			pause := pauseAny.(bool)
