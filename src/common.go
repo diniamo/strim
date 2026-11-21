@@ -418,3 +418,12 @@ func (d *debouncer) debounceOrUpdate(typ messageType, payload any) bool {
 
 	panic("unreachable")
 }
+
+// SECTION: overlay
+const overlayID = 1
+func showOverlay(ipc *gopv.Client) {
+	ipc.Request("osd-overlay", overlayID, "ass-events", `{\an9\i1\bord1}Waiting for others...`)
+}
+func hideOverlay(ipc *gopv.Client) {
+	ipc.Request("osd-overlay", overlayID, "none", "")
+}

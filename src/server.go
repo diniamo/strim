@@ -504,6 +504,9 @@ func (s *server) waitStart(time *float64) {
 
 		if time != nil {
 			s.waitTime = *time
+
+			s.debouncer.debounceNext(messageTypeSeek, s.waitTime)
+			s.ipc.Request("set_property", "playback-time", s.waitTime)
 		} else {
 			timeAny := <-s.ipc.Request("get_property", "playback-time")
 			if err, ok := timeAny.(error); ok {
@@ -513,6 +516,7 @@ func (s *server) waitStart(time *float64) {
 			}
 		}
 
+		showOverlay(s.ipc)
 		s.sendAll(messageTypeWaitStart, s.waitTime, invalidID)
 	}
 }
@@ -537,6 +541,7 @@ func (s *server) waitCheck() {
 			s.ipc.Request("set_property", "pause", false)
 		}
 
+		hideOverlay(s.ipc)
 		s.sendAll(messageTypeWaitDone, s.waitResume, invalidID)
 	}
 }

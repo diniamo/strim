@@ -209,9 +209,6 @@ func runClient(args []string) {
 				c.waiting   = true
 				c.sendReady = true
 
-				c.debouncer.debounceNext(messageTypeSpeed, m.speed)
-				c.debouncer.debounceNext(messageTypeSeek, nil)
-
 				url := m.url
 				if url == "" {
 					url = "http://127.0.0.1:" + proxyPort
@@ -224,8 +221,11 @@ func runClient(args []string) {
 					options = fmt.Sprintf("speed=%f,start=%f", m.speed, m.time)
 				}
 
+				c.debouncer.debounceNext(messageTypeSpeed, m.speed)
+				c.debouncer.debounceNext(messageTypeSeek, m.time)
 				c.ipc.Request("loadfile", url, "replace", -1, options)
 
+				showOverlay(c.ipc)
 			case messageTypePause:
 				c.debouncer.debounceNext(messageTypePause, nil)
 				c.ipc.Request("set_property", "pause", true)
@@ -256,12 +256,16 @@ func runClient(args []string) {
 
 				c.debouncer.debounceNext(messageTypeSeek, c.waitTime)
 				c.ipc.Request("set_property", "playback-time", c.waitTime)
+
+				showOverlay(c.ipc)
 			case messageTypeWaitDone:
 				c.waiting = false
 				if msg.payload.(bool) {
 					c.debouncer.debounceNext(messageTypeResume, nil)
 					c.ipc.Request("set_property", "pause", false)
 				}
+
+				hideOverlay(c.ipc)
 			}
 
 		case <-heartbeatTicker.C:
