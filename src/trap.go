@@ -3,10 +3,14 @@ package main
 import (
 	"os"
 	"os/signal"
+	"sync"
 	"syscall"
 )
 
-var trapCallbacks []func()
+var (
+	trapMu        sync.Mutex
+	trapCallbacks []func()
+)
 
 func TrapRegister() {
 	sigChan := make(chan os.Signal, 1)
@@ -24,7 +28,9 @@ func TrapRegister() {
 }
 
 func TrapDefer(callback func()) {
+	trapMu.Lock()
 	trapCallbacks = append(trapCallbacks, callback)
+	trapMu.Unlock()
 }
 
 func TrapExit(code int) {
@@ -33,7 +39,12 @@ func TrapExit(code int) {
 }
 
 func TrapRun() {
+	trapMu.Lock()
+
 	for i := len(trapCallbacks) - 1; i >= 0; i -= 1 {
 		trapCallbacks[i]()
 	}
+	trapCallbacks = nil
+
+	trapMu.Unlock()
 }

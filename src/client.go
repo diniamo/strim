@@ -157,7 +157,7 @@ func runClient(args []string) {
 		"--idle", "--force-window", "--keep-open",
 		"--no-resume-playback", "--no-save-position-on-quit",
 		"--pause",
-		"--quiet",
+		"--msg-level=all=error",
 	)...)
 	TrapDefer(func() {
 		c.mpv.Process.Kill()

@@ -348,8 +348,8 @@ func setupPath() {
 
 func mpv(args ...string) (*exec.Cmd, *gopv.Client) {
 	cmd := exec.Command("mpv", args...)
-	// cmd.Stdout = os.Stdout
-	// cmd.Stderr = os.Stderr
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
 
 	client, err := gopv.Host(cmd)
 	if err != nil { Fatal("Failed to host mpv connection target:", err) }

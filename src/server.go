@@ -158,10 +158,10 @@ func runServer(args []string) {
 	// NOTE: the protocol specified here only refers to the in-tunnel one,
 	// the actual protocol is promoted to UDP by magicsock if possible.
 	messageListener, err := ts.Listen(context.Background(), "tcp", messageAddress)
-	if err != nil { Fatal("Failed to listen:", err) }
+	if err != nil { Fatal("Failed to listen for connections:", err) }
 
 	streamListener, err := ts.Listen(context.Background(), "tcp", streamAddress)
-	if err != nil { Fatal("Failed to listen:", err) }
+	if err != nil { Fatal("Failed to listen for connections:", err) }
 
 	go func() {
 		for {
@@ -194,7 +194,7 @@ func runServer(args []string) {
 
 	// IMPORTANT: imprecise seeks may result in multiple seconds of desync,
 	// since what would be the precise seek is reported anyway
-	s.mpv, s.ipc = mpv(append(args, "--hr-seek", "--keep-open", "--quiet")...)
+	s.mpv, s.ipc = mpv(append(args, "--hr-seek", "--keep-open", "--msg-level=all=error")...)
 	TrapDefer(func() {
 		s.mpv.Process.Kill()
 	})
@@ -218,8 +218,8 @@ func runServer(args []string) {
 	// SECTION: graceful shutdown
 	exitChan := make(chan struct{})
 	TrapDefer(func() {
-		exitChan <- struct{}{}
 		s.shuttingDown.Store(true)
+		close(exitChan)
 	})
 
 	// SECTION: main loop
