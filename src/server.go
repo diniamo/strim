@@ -381,7 +381,10 @@ func runServer(args []string) {
 
 			case "playback-restart":
 				s.ready = true
-				s.waitCheck()
+				if s.waiting {
+					showOverlay(s.ipc, "Waiting for others...")
+					s.waitCheck()
+				}
 
 			case "seek":
 				if s.debouncer.debounceOrUpdate(messageTypeSeek, nil) {
@@ -502,6 +505,12 @@ func (s *server) waitStart(time *float64) {
 			s.ipc.Request("set_property", "pause", true)
 		}
 
+		if s.ready {
+			showOverlay(s.ipc, "Waiting for others...")
+		} else {
+			showOverlay(s.ipc, "Buffering...")
+		}
+
 		if time != nil {
 			s.waitTime = *time
 
@@ -516,7 +525,6 @@ func (s *server) waitStart(time *float64) {
 			}
 		}
 
-		showOverlay(s.ipc)
 		s.sendAll(messageTypeWaitStart, s.waitTime, invalidID)
 	}
 }
@@ -540,8 +548,8 @@ func (s *server) waitCheck() {
 			s.debouncer.debounceNext(messageTypeResume, nil)
 			s.ipc.Request("set_property", "pause", false)
 		}
-
 		hideOverlay(s.ipc)
+
 		s.sendAll(messageTypeWaitDone, s.waitResume, invalidID)
 	}
 }

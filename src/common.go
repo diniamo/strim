@@ -421,8 +421,8 @@ func (d *debouncer) debounceOrUpdate(typ messageType, payload any) bool {
 
 // SECTION: overlay
 const overlayID = 1
-func showOverlay(ipc *gopv.Client) {
-	ipc.Request("osd-overlay", overlayID, "ass-events", `{\an9\i1\bord1}Waiting for others...`)
+func showOverlay(ipc *gopv.Client, text string) {
+	ipc.Request("osd-overlay", overlayID, "ass-events", `{\an9\i1\bord1}` + text)
 }
 func hideOverlay(ipc *gopv.Client) {
 	ipc.Request("osd-overlay", overlayID, "none", "")

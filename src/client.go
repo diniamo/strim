@@ -225,7 +225,7 @@ func runClient(args []string) {
 				c.debouncer.debounceNext(messageTypeSeek, m.time)
 				c.ipc.Request("loadfile", url, "replace", -1, options)
 
-				showOverlay(c.ipc)
+				showOverlay(c.ipc, "Buffering...")
 			case messageTypePause:
 				c.debouncer.debounceNext(messageTypePause, nil)
 				c.ipc.Request("set_property", "pause", true)
@@ -257,7 +257,7 @@ func runClient(args []string) {
 				c.debouncer.debounceNext(messageTypeSeek, c.waitTime)
 				c.ipc.Request("set_property", "playback-time", c.waitTime)
 
-				showOverlay(c.ipc)
+				showOverlay(c.ipc, "Buffering...")
 			case messageTypeWaitDone:
 				c.waiting = false
 				if msg.payload.(bool) {
@@ -278,12 +278,16 @@ func runClient(args []string) {
 		case event := <-eventChan:
 			switch event.Name {
 			case "playback-restart":
-				if c.sendReady {
-					c.sendReady = false
-					err := sendMessage(c.messageConn, messageTypeReady, nil)
-					if err != nil {
-						breakErr = err
-						break outer
+				if c.waiting {
+					showOverlay(c.ipc, "Waiting for others...")
+
+					if c.sendReady {
+						c.sendReady = false
+						err := sendMessage(c.messageConn, messageTypeReady, nil)
+						if err != nil {
+							breakErr = err
+							break outer
+						}
 					}
 				}
 			case "seek":
